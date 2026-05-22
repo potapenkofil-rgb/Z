@@ -5,6 +5,7 @@ import time
 from typing import Any, Optional
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from telethon.tl.functions.messages import GetDialogFiltersRequest
 
 from config import bot
 
@@ -168,7 +169,7 @@ def _card_text(t: FloodTask) -> str:
     kind   = 'gflood' if t.target_chats else 'flood'
     body   = t.text or '(медиа без текста)'
     return (
-        f'📋 <b>Задача #{t.id}</b> [{kind}] — {status}\n\n'
+        f'📋 <b>Задача <code>#{t.id}</code></b> [{kind}] — {status}\n\n'
         f'📍 <b>Чат:</b> {t.chat_title}\n'
         f'⏱ <b>Задержка:</b> {t.delay} с\n'
         f'📨 <b>Прогресс:</b> {t.sent}/{t.count}\n'
@@ -209,7 +210,7 @@ def _tasks_page_text(uid: int, page: int) -> str:
         icon = '⏸' if t.paused else '▶️'
         pre  = (t.text[:30] + '…') if len(t.text) > 30 else (t.text or '(медиа)')
         lines.append(
-            f'{icon} <b>#{t.id}</b>  {t.chat_title}\n'
+            f'{icon} <code>#{t.id}</code>  {t.chat_title}\n'
             f'   {pre}\n'
             f'   {t.sent}/{t.count} ({int(t.progress*100)}%)  ⏱{t.delay}с  ⌛~{int(t.eta)}с'
         )
@@ -251,13 +252,44 @@ async def _send_tasks_list(chat_id: int, uid: int):
 async def _launch_gflood(client, user_id: int, folder_id: int,
                           cfg: dict, chat_id_bot: int, main_loop):
     import asyncio as _asyncio
+    chats = []
     try:
         dialogs = await client.get_dialogs(folder=folder_id)
-        chats   = [d.id for d in dialogs]
-    except Exception as e:
-        _asyncio.run_coroutine_threadsafe(
-            bot.send_message(chat_id_bot, f'❌ Ошибка папки: {e}'), main_loop)
-        return
+        for d in dialogs:
+            try:
+                if d.entity is not None:
+                    chats.append(d.id)
+            except Exception:
+                continue
+    except Exception:
+        # Fallback: берём все диалоги и фильтруем по папке вручную
+        try:
+            from telethon.tl.types import DialogFilter
+            res     = await client(GetDialogFiltersRequest())
+            folder  = next((f for f in res.filters if getattr(f, 'id', None) == folder_id), None)
+            if folder is None:
+                _asyncio.run_coroutine_threadsafe(
+                    bot.send_message(chat_id_bot, '❌ Папка не найдена'), main_loop)
+                return
+            peer_ids = set()
+            for peer in getattr(folder, 'include_peers', []):
+                pid = getattr(peer, 'channel_id', None) or getattr(peer, 'chat_id', None) or getattr(peer, 'user_id', None)
+                if pid:
+                    peer_ids.add(pid)
+            all_dialogs = await client.get_dialogs()
+            for d in all_dialogs:
+                try:
+                    if d.entity is None:
+                        continue
+                    eid = getattr(d.entity, 'id', None)
+                    if eid and eid in peer_ids:
+                        chats.append(d.id)
+                except Exception:
+                    continue
+        except Exception as e2:
+            _asyncio.run_coroutine_threadsafe(
+                bot.send_message(chat_id_bot, f'❌ Ошибка папки: {e2}'), main_loop)
+            return
 
     if not chats:
         _asyncio.run_coroutine_threadsafe(

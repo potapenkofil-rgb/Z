@@ -101,12 +101,12 @@ async def _cmd_gflood(event, client, user_id: int, chat_id_bot: int, main_loop):
     text  = event.message.message or ''
     parts = text.split(' ', 4)
     try:
-        delay = float(parts[1])
-        count = int(parts[2])
-        mode  = parts[3].lower()
+        mode  = parts[1].lower()
         if mode not in ('s', 'o'):
             return
-        body = parts[4] if len(parts) > 4 else ''
+        delay = float(parts[2])
+        count = int(parts[3])
+        body  = parts[4] if len(parts) > 4 else ''
     except (IndexError, ValueError):
         return
 
@@ -146,7 +146,7 @@ async def _cmd_gflood(event, client, user_id: int, chat_id_bot: int, main_loop):
 
 
 async def _cmd_stop(event, client, user_id: int, chat_id_bot: int, main_loop):
-    parts = (event.message.message or '').split()[1:]  # все ID после /stop
+    parts = [(s.lstrip('#')) for s in (event.message.message or '').split()[1:]]  # все ID после /stop
     if not parts:
         return
     if len(parts) > 10:
@@ -185,7 +185,7 @@ async def _cmd_stop(event, client, user_id: int, chat_id_bot: int, main_loop):
 
 
 async def _cmd_task(event, client, user_id: int, chat_id_bot: int, main_loop):
-    ids = (event.message.message or '').split()[1:]
+    ids = [(s.lstrip('#')) for s in (event.message.message or '').split()[1:]]
 
     if len(ids) > 5:
         asyncio.run_coroutine_threadsafe(
