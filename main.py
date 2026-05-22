@@ -7,7 +7,9 @@ from config import bot, dp
 from cryptopay import get_invoice
 from sessions import is_admin, load_meta
 from subscriptions import (
+    clear_running_tasks,
     extend_sub,
+    get_all_running_tasks,
     get_expiring_soon,
     get_pending_invoices,
     init_db,
@@ -131,6 +133,36 @@ async def notify_expiring():
 # Entry point
 # ─────────────────────────────────────────────────────────────────
 
+async def notify_interrupted_tasks():
+    """При рестарте сообщает пользователям о прерванных задачах."""
+    tasks = get_all_running_tasks()
+    if not tasks:
+        return
+    meta = load_meta()
+    by_user: dict[int, list] = {}
+    for t in tasks:
+        by_user.setdefault(t['user_id'], []).append(t)
+    for user_id, user_tasks in by_user.items():
+        info = meta.get(str(user_id))
+        if not info:
+            continue
+        chat_id = info.get('chat_id', user_id)
+        lines = []
+        for t in user_tasks:
+            pct  = int(t['sent'] / t['count'] * 100) if t['count'] else 0
+            kind = '📂 gflood' if t['is_gflood'] else ('🖼 медиа' if t['has_media'] else '📨 flood')
+            lines.append(f'• #{t["id"]} {kind} — {t["chat_title"]} ({t["sent"]}/{t["count"]}, {pct}%)')
+        try:
+            await bot.send_message(
+                chat_id,
+                '⚠️ <b>Бот был перезапущен.</b>\n\nПрерванные задачи:\n' + '\n'.join(lines),
+                parse_mode='HTML',
+            )
+        except Exception:
+            pass
+    clear_running_tasks()
+
+
 async def _supervised(coro_fn, name: str):
     """Запускает корутину и перезапускает её при падении."""
     while True:
@@ -144,6 +176,7 @@ async def _supervised(coro_fn, name: str):
 async def main():
     init_db()
     init_templates_db()
+    await notify_interrupted_tasks()
     await restore_all_sessions()
     asyncio.create_task(_supervised(poll_invoices,    'poll_invoices'))
     asyncio.create_task(_supervised(notify_expiring,  'notify_expiring'))

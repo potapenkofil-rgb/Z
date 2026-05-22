@@ -11,7 +11,10 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from telethon.tl.functions.messages import GetDialogFiltersRequest
 
 from config import bot, WATERMARK_TEXT
-from subscriptions import has_active_sub
+from subscriptions import (
+    delete_running_task, has_active_sub,
+    save_running_task, update_task_sent,
+)
 from templates import is_blacklisted
 
 # ─────────────────────────────────────────────────────────────────
@@ -61,6 +64,10 @@ _id_gen = itertools.count(1)
 
 def _t_add(t: FloodTask):
     _tasks.setdefault(t.user_id, {})[t.id] = t
+    try:
+        save_running_task(t)
+    except Exception:
+        pass
 
 def _t_del(uid: int, tid: int):
     _tasks.get(uid, {}).pop(tid, None)
@@ -204,6 +211,11 @@ async def run_flood(task: FloodTask, client):
                 await _send_one(client, task.chat_id, task.text,
                                task.entities or [], task.media, task.user_id)
                 task.sent += 1
+                if task.sent % 10 == 0:
+                    try:
+                        update_task_sent(task.user_id, task.id, task.sent)
+                    except Exception:
+                        pass
             except Exception as e:
                 print(f'[flood#{task.id}] {e}')
             if task.sent < task.count and not task.stopped:
@@ -213,6 +225,10 @@ async def run_flood(task: FloodTask, client):
     finally:
         task.stopped = True
         _t_del(task.user_id, task.id)
+        try:
+            delete_running_task(task.user_id, task.id)
+        except Exception:
+            pass
 
 
 async def run_gflood(task: FloodTask, client):
@@ -261,6 +277,10 @@ async def run_gflood(task: FloodTask, client):
     finally:
         task.stopped = True
         _t_del(task.user_id, task.id)
+        try:
+            delete_running_task(task.user_id, task.id)
+        except Exception:
+            pass
         # Отчёт пользователю об ошибках через главный loop бота
         if errors:
             from state import userbot_refs
