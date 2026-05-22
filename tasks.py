@@ -260,35 +260,12 @@ async def _launch_gflood(client, user_id: int, folder_id: int,
             _asyncio.run_coroutine_threadsafe(
                 bot.send_message(chat_id_bot, '❌ Папка не найдена'), main_loop)
             return
-        peer_ids = set()
         for peer in getattr(folder, 'include_peers', []):
-            pid = (getattr(peer, 'channel_id', None)
-                   or getattr(peer, 'chat_id', None)
-                   or getattr(peer, 'user_id', None))
-            if pid:
-                peer_ids.add(pid)
-        all_dialogs = await client.get_dialogs(limit=None)
-        dialog_ids  = {}
-        for d in all_dialogs:
             try:
-                eid = getattr(d.entity, 'id', None) if d.entity is not None else None
-                if eid:
-                    dialog_ids[eid] = d.id
+                entity = await client.get_entity(peer)
+                chats.append(entity)
             except Exception:
                 continue
-        for pid in peer_ids:
-            if pid in dialog_ids:
-                chats.append(dialog_ids[pid])
-
-        # диагностика — временно
-        _asyncio.run_coroutine_threadsafe(
-            bot.send_message(
-                chat_id_bot,
-                f'🔍 Диагностика папки:\n'
-                f'peers в папке: {len(peer_ids)} → {list(peer_ids)}\n'
-                f'диалогов загружено: {len(all_dialogs)}\n'
-                f'совпало: {len(chats)}'
-            ), main_loop)
     except Exception as e:
         _asyncio.run_coroutine_threadsafe(
             bot.send_message(chat_id_bot, f'❌ Ошибка папки: {e}'), main_loop)
