@@ -120,6 +120,18 @@ async def run_gflood(task: FloodTask, client):
     o — идём по чатам по очереди с delay между каждым, count раундов.
     """
     chats = task.target_chats or []
+    errors = []
+
+    async def _send_with_log(c):
+        try:
+            await _send_one(client, c, task.text, task.media)
+            task.sent += 1
+        except Exception as e:
+            name = getattr(c, 'title', None) or getattr(c, 'first_name', str(c))
+            err  = f'[gflood#{task.id}] {name}: {e}'
+            print(err)
+            errors.append(err)
+
     try:
         for rnd in range(task.count):
             if task.stopped:
@@ -130,11 +142,7 @@ async def run_gflood(task: FloodTask, client):
                 break
 
             if task.gflood_mode == 's':
-                await asyncio.gather(
-                    *[_send_one(client, c, task.text, task.media) for c in chats],
-                    return_exceptions=True,
-                )
-                task.sent += 1
+                await asyncio.gather(*[_send_with_log(c) for c in chats])
                 if rnd + 1 < task.count:
                     await _pausable_sleep(task, task.delay)
             else:  # 'o'
@@ -143,11 +151,7 @@ async def run_gflood(task: FloodTask, client):
                         break
                     while task.paused and not task.stopped:
                         await asyncio.sleep(0.3)
-                    try:
-                        await _send_one(client, c, task.text, task.media)
-                        task.sent += 1
-                    except Exception as e:
-                        print(f'[gflood#{task.id}] {e}')
+                    await _send_with_log(c)
                     if not task.stopped:
                         await _pausable_sleep(task, task.delay)
     except asyncio.CancelledError:
@@ -155,6 +159,38 @@ async def run_gflood(task: FloodTask, client):
     finally:
         task.stopped = True
         _t_del(task.user_id, task.id)
+        # Отчёт пользователю об ошибках через главный loop бота
+        if errors:
+            from state import userbot_refs
+            ref = userbot_refs.get(task.user_id)
+            if ref:
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        bot.send_message(
+                            task.user_id,
+                            f'⚠️ gflood #{task.id} — ошибки отправки:\n' +
+                            '\n'.join(errors[:10]) +
+                            (f'\n…и ещё {len(errors)-10}' if len(errors) > 10 else '')
+                        ),
+                        ref['main_loop'],
+                    )
+                except Exception:
+                    pass
+        else:
+            # Успех — тоже уведомим
+            from state import userbot_refs
+            ref = userbot_refs.get(task.user_id)
+            if ref and task.sent > 0:
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        bot.send_message(
+                            task.user_id,
+                            f'✅ gflood #{task.id} завершён — отправлено {task.sent}'
+                        ),
+                        ref['main_loop'],
+                    )
+                except Exception:
+                    pass
 
 
 # ─────────────────────────────────────────────────────────────────
