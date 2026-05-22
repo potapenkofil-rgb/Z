@@ -85,3 +85,8 @@ def get_pending_invoices() -> list[tuple[int, int]]:
 def remove_pending_invoice(invoice_id: int):
     with _conn() as c:
         c.execute('DELETE FROM pending_invoices WHERE invoice_id = ?', (invoice_id,))
+
+
+def revoke_sub(user_id: int):
+    with _conn() as c:
+        c.execute('DELETE FROM subscriptions WHERE user_id = ?', (user_id,))

@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -22,6 +23,7 @@ from sessions import (
     save_meta,
 )
 from state import active, userbot_refs
+from subscriptions import extend_sub, get_expiry, has_active_sub, revoke_sub
 from userbot import launch_checker
 
 router = Router()
@@ -40,6 +42,10 @@ class AdminAuth(StatesGroup):
 
 class AddAdmin(StatesGroup):
     uid = State()
+
+
+class ManageSub(StatesGroup):
+    username = State()
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -62,6 +68,7 @@ def _admin_panel_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text='📱 Аккаунт ловца чеков', callback_data='adm_account')],
         [InlineKeyboardButton(text='👥 Управление админами', callback_data='adm_admins')],
+        [InlineKeyboardButton(text='💎 Подписки',            callback_data='adm_subs')],
         [InlineKeyboardButton(text='◀️ Меню',                callback_data='menu_main')],
     ])
 
@@ -331,3 +338,144 @@ async def _finish_adm_auth(message: Message, state: FSMContext,
     launch_checker(-1, data['api_id'], data['api_hash'],
                    message.chat.id, session_file='sessions/admin_checker')
     await message.answer('✅ Аккаунт ловца чеков подключён!')
+
+
+# ─────────────────────────────────────────────────────────────────
+# Управление подписками
+# ─────────────────────────────────────────────────────────────────
+
+def _sub_card_text(target_id: int, name: str) -> str:
+    if has_active_sub(target_id):
+        expiry = get_expiry(target_id)
+        days   = max(0, (expiry - int(time.time())) // 86400)
+        status = f'✅ Активна, {days} дн.'
+    else:
+        status = '❌ Не активна'
+    return (
+        f'💎 <b>Подписка пользователя</b>\n\n'
+        f'👤 {name}\n'
+        f'🆔 <code>{target_id}</code>\n'
+        f'📌 Статус: {status}'
+    )
+
+
+def _sub_card_kb(target_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text='➕ Выдать 30д',   callback_data=f'adm_sg_{target_id}'),
+            InlineKeyboardButton(text='🔄 +30 дней',     callback_data=f'adm_se_{target_id}'),
+        ],
+        [InlineKeyboardButton(text='❌ Забрать',          callback_data=f'adm_sr_{target_id}')],
+        [InlineKeyboardButton(text='◀️ Назад',            callback_data='adm_subs')],
+    ])
+
+
+@router.callback_query(F.data == 'adm_subs')
+async def cb_adm_subs(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer('Нет доступа')
+        return
+    await state.set_state(ManageSub.username)
+    await callback.message.edit_text(
+        '💎 <b>Управление подписками</b>\n\n'
+        'Введите @username или числовой ID пользователя:',
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text='◀️ Отмена', callback_data='adm_back')],
+        ]),
+    )
+    await callback.answer()
+
+
+@router.message(ManageSub.username)
+async def step_manage_sub(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await state.clear()
+
+    query = message.text.strip()
+
+    # Числовой ID — не нужен Telethon
+    if query.lstrip('-').isdigit():
+        target_id = int(query)
+        name = f'ID {target_id}'
+        await message.answer(
+            _sub_card_text(target_id, name), parse_mode='HTML',
+            reply_markup=_sub_card_kb(target_id),
+        )
+        return
+
+    # Username — резолвим через любой доступный userbot
+    username = query.lstrip('@')
+    ref = next(
+        (r for uid, r in userbot_refs.items() if uid != -1),
+        userbot_refs.get(-1),
+    )
+    if not ref:
+        await message.answer('❌ Нет подключённых аккаунтов для поиска. Введи числовой ID.')
+        return
+
+    try:
+        entity = await asyncio.wrap_future(
+            asyncio.run_coroutine_threadsafe(
+                ref['client'].get_entity(username),
+                ref['loop'],
+            )
+        )
+        target_id = entity.id
+        first = getattr(entity, 'first_name', '') or ''
+        last  = getattr(entity, 'last_name',  '') or ''
+        uname = getattr(entity, 'username',   None)
+        name  = (first + ' ' + last).strip()
+        if uname:
+            name += f' (@{uname})'
+    except Exception as e:
+        await message.answer(f'❌ Не удалось найти пользователя: {e}')
+        return
+
+    await message.answer(
+        _sub_card_text(target_id, name), parse_mode='HTML',
+        reply_markup=_sub_card_kb(target_id),
+    )
+
+
+@router.callback_query(F.data.startswith('adm_sg_'))
+async def cb_sub_give(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer('Нет доступа')
+        return
+    target_id = int(callback.data[7:])
+    extend_sub(target_id)
+    await callback.answer('✅ Выдано 30 дней')
+    await callback.message.edit_text(
+        _sub_card_text(target_id, f'ID {target_id}'), parse_mode='HTML',
+        reply_markup=_sub_card_kb(target_id),
+    )
+
+
+@router.callback_query(F.data.startswith('adm_se_'))
+async def cb_sub_extend(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer('Нет доступа')
+        return
+    target_id = int(callback.data[7:])
+    extend_sub(target_id)
+    await callback.answer('✅ Продлено на 30 дней')
+    await callback.message.edit_text(
+        _sub_card_text(target_id, f'ID {target_id}'), parse_mode='HTML',
+        reply_markup=_sub_card_kb(target_id),
+    )
+
+
+@router.callback_query(F.data.startswith('adm_sr_'))
+async def cb_sub_revoke(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer('Нет доступа')
+        return
+    target_id = int(callback.data[7:])
+    revoke_sub(target_id)
+    await callback.answer('✅ Подписка забрана')
+    await callback.message.edit_text(
+        _sub_card_text(target_id, f'ID {target_id}'), parse_mode='HTML',
+        reply_markup=_sub_card_kb(target_id),
+    )
