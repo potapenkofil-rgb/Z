@@ -4,6 +4,8 @@ import itertools
 import time
 from typing import Any, Optional
 
+from templates import blacklisted_ids
+
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from config import bot
@@ -209,7 +211,7 @@ def _tasks_page_text(uid: int, page: int) -> str:
         icon = '⏸' if t.paused else '▶️'
         pre  = (t.text[:30] + '…') if len(t.text) > 30 else (t.text or '(медиа)')
         lines.append(
-            f'{icon} <b>#{t.id}</b>  {t.chat_title}\n'
+            f'{icon} /task#{t.id}  {t.chat_title}\n'
             f'   {pre}\n'
             f'   {t.sent}/{t.count} ({int(t.progress*100)}%)  ⏱{t.delay}с  ⌛~{int(t.eta)}с'
         )
@@ -230,6 +232,8 @@ def _tasks_page_kb(uid: int, page: int) -> InlineKeyboardMarkup:
             nav.append(InlineKeyboardButton(text='▶️', callback_data=f'tl_{page + 1}'))
         rows.append(nav)
     rows.append([InlineKeyboardButton(text='🔄 Обновить', callback_data=f'tl_{page}')])
+    if all_tasks:
+        rows.append([InlineKeyboardButton(text='⏹ Остановить все', callback_data='ts_all')])
     rows.append([InlineKeyboardButton(text='◀️ Меню',     callback_data='menu_main')])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -249,11 +253,13 @@ async def _send_tasks_list(chat_id: int, uid: int):
 # ─────────────────────────────────────────────────────────────────
 
 async def _launch_gflood(client, user_id: int, folder_id: int,
-                          cfg: dict, chat_id_bot: int, main_loop):
+                          cfg: dict, chat_id_bot: int, main_loop,
+                          folder_title: str = ''):
     import asyncio as _asyncio
     try:
         dialogs = await client.get_dialogs(folder=folder_id)
-        chats   = [d.id for d in dialogs]
+        bl      = blacklisted_ids(user_id)
+        chats   = [d.id for d in dialogs if d.id not in bl]
     except Exception as e:
         _asyncio.run_coroutine_threadsafe(
             bot.send_message(chat_id_bot, f'❌ Ошибка папки: {e}'), main_loop)
@@ -264,10 +270,11 @@ async def _launch_gflood(client, user_id: int, folder_id: int,
             bot.send_message(chat_id_bot, '❌ В папке нет чатов'), main_loop)
         return
 
+    title      = folder_title or 'папка'
     mode_label = 'одновременно' if cfg['mode'] == 's' else 'по очереди'
     t = FloodTask(
         id=next(_id_gen), user_id=user_id,
-        chat_id=0, chat_title=f'📂 папка ({len(chats)} чатов)',
+        chat_id=0, chat_title=f'📂 {title} ({len(chats)} чатов)',
         text=cfg['text'], media=cfg['media'],
         delay=cfg['delay'], count=cfg['count'],
         target_chats=chats, gflood_mode=cfg['mode'],
@@ -278,7 +285,7 @@ async def _launch_gflood(client, user_id: int, folder_id: int,
         bot.send_message(
             chat_id_bot,
             f'✅ gflood <b>#{t.id}</b> запущен\n'
-            f'📂 {len(chats)} чатов  ·  {t.count}×  ·  {t.delay}с  ·  {mode_label}',
+            f'📂 <b>{title}</b>  {len(chats)} чатов  ·  {t.count}×  ·  {t.delay}с  ·  {mode_label}',
             parse_mode='HTML',
         ),
         main_loop,

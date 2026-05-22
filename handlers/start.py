@@ -52,6 +52,10 @@ def _main_menu_kb(uid: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text='📱 Мой аккаунт', callback_data='menu_account'),
         ],
         [
+            InlineKeyboardButton(text='📋 Шаблоны',      callback_data='tmpl_list'),
+            InlineKeyboardButton(text='🚫 Черный список', callback_data='bl_list'),
+        ],
+        [
             InlineKeyboardButton(text='📖 Команды', callback_data='guide_main'),
         ],
     ]

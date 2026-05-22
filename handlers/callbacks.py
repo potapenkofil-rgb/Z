@@ -8,6 +8,7 @@ from tasks import (
     _card_kb,
     _card_text,
     _launch_gflood,
+    _t_all,
     _t_del,
     _t_get,
     _tasks_page_kb,
@@ -50,6 +51,23 @@ async def cb_pause(callback: CallbackQuery):
     t.paused = not t.paused
     await callback.answer('⏸ Пауза' if t.paused else '▶️ Возобновлена')
     await callback.message.edit_text(_card_text(t), parse_mode='HTML', reply_markup=_card_kb(t))
+
+
+@router.callback_query(F.data == 'ts_all')
+async def cb_stop_all(callback: CallbackQuery):
+    uid   = callback.from_user.id
+    tasks = _t_all(uid)
+    count = len(tasks)
+    for t in tasks:
+        t.stopped = True
+        if t.asyncio_task:
+            t.asyncio_task.cancel()
+        _t_del(uid, t.id)
+    await callback.answer(f'⏹ Остановлено: {count}')
+    await callback.message.edit_text(
+        _tasks_page_text(uid, 0), parse_mode='HTML',
+        reply_markup=_tasks_page_kb(uid, 0),
+    )
 
 
 @router.callback_query(F.data.startswith('ts_'))
@@ -101,8 +119,9 @@ async def cb_gflood_folder(callback: CallbackQuery):
     await callback.message.edit_text('⏳ Получаю список чатов папки...')
     await callback.answer()
 
+    folder_title = cfg.get('folder_titles', {}).get(int(folder_s), '')
     asyncio.run_coroutine_threadsafe(
         _launch_gflood(ref['client'], uid, int(folder_s), cfg,
-                       callback.message.chat.id, ref['main_loop']),
+                       callback.message.chat.id, ref['main_loop'], folder_title),
         ref['loop'],
     )

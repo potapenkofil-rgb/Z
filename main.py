@@ -5,6 +5,7 @@ from sessions import load_meta
 from userbot import connect_and_run
 
 from handlers import admin, auth, callbacks, guide, start
+from handlers import templates as tmpl_handlers
 
 # ─────────────────────────────────────────────────────────────────
 # Register routers
@@ -15,6 +16,7 @@ dp.include_router(auth.router)
 dp.include_router(admin.router)
 dp.include_router(guide.router)
 dp.include_router(callbacks.router)
+dp.include_router(tmpl_handlers.router)
 
 # ─────────────────────────────────────────────────────────────────
 # Session restore on startup

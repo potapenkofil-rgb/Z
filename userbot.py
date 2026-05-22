@@ -41,7 +41,8 @@ async def _on_outgoing(event, client, user_id: int, chat_id_bot: int, main_loop)
         await event.message.delete()
         asyncio.run_coroutine_threadsafe(_send_tasks_list(chat_id_bot, user_id), main_loop)
     elif cmd == '/stop':      await _cmd_stop(event, client, user_id, chat_id_bot, main_loop)
-    elif cmd == '/task':      await _cmd_task(event, client, user_id, chat_id_bot, main_loop)
+    elif cmd == '/task' or re.match(r'^/task[#\d]', cmd):
+        await _cmd_task(event, client, user_id, chat_id_bot, main_loop)
 
 
 async def _cmd_flood(event, client, user_id: int):
@@ -123,6 +124,7 @@ async def _cmd_gflood(event, client, user_id: int, chat_id_bot: int, main_loop):
     pending_gflood[user_id] = {
         'delay': delay, 'count': count, 'mode': mode,
         'text':  body,  'media': media,
+        'folder_titles': {f.id: _ftitle(f) for f in folders},
     }
 
     rows = [
@@ -179,7 +181,15 @@ async def _cmd_stop(event, client, user_id: int, chat_id_bot: int, main_loop):
 
 
 async def _cmd_task(event, client, user_id: int, chat_id_bot: int, main_loop):
-    ids = (event.message.message or '').split()[1:]
+    raw    = event.message.message or ''
+    tokens = raw.split()
+    first  = tokens[0]                   # /task | /task#1 | /task1
+    suffix = first[5:].lstrip('#')       # strip '/task' and optional '#'
+
+    ids = []
+    if suffix.isdigit():
+        ids.append(suffix)
+    ids += [tok.lstrip('#') for tok in tokens[1:]]
 
     if len(ids) > 5:
         asyncio.run_coroutine_threadsafe(
