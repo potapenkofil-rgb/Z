@@ -254,42 +254,31 @@ async def _launch_gflood(client, user_id: int, folder_id: int,
     import asyncio as _asyncio
     chats = []
     try:
-        dialogs = await client.get_dialogs(folder=folder_id)
-        for d in dialogs:
+        res    = await client(GetDialogFiltersRequest())
+        folder = next((f for f in res.filters if getattr(f, 'id', None) == folder_id), None)
+        if folder is None:
+            _asyncio.run_coroutine_threadsafe(
+                bot.send_message(chat_id_bot, '❌ Папка не найдена'), main_loop)
+            return
+        peer_ids = set()
+        for peer in getattr(folder, 'include_peers', []):
+            pid = (getattr(peer, 'channel_id', None)
+                   or getattr(peer, 'chat_id', None)
+                   or getattr(peer, 'user_id', None))
+            if pid:
+                peer_ids.add(pid)
+        all_dialogs = await client.get_dialogs()
+        for d in all_dialogs:
             try:
-                if d.entity is not None:
+                eid = getattr(d.entity, 'id', None) if d.entity is not None else None
+                if eid and eid in peer_ids:
                     chats.append(d.id)
             except Exception:
                 continue
-    except Exception:
-        # Fallback: берём все диалоги и фильтруем по папке вручную
-        try:
-            from telethon.tl.types import DialogFilter
-            res     = await client(GetDialogFiltersRequest())
-            folder  = next((f for f in res.filters if getattr(f, 'id', None) == folder_id), None)
-            if folder is None:
-                _asyncio.run_coroutine_threadsafe(
-                    bot.send_message(chat_id_bot, '❌ Папка не найдена'), main_loop)
-                return
-            peer_ids = set()
-            for peer in getattr(folder, 'include_peers', []):
-                pid = getattr(peer, 'channel_id', None) or getattr(peer, 'chat_id', None) or getattr(peer, 'user_id', None)
-                if pid:
-                    peer_ids.add(pid)
-            all_dialogs = await client.get_dialogs()
-            for d in all_dialogs:
-                try:
-                    if d.entity is None:
-                        continue
-                    eid = getattr(d.entity, 'id', None)
-                    if eid and eid in peer_ids:
-                        chats.append(d.id)
-                except Exception:
-                    continue
-        except Exception as e2:
-            _asyncio.run_coroutine_threadsafe(
-                bot.send_message(chat_id_bot, f'❌ Ошибка папки: {e2}'), main_loop)
-            return
+    except Exception as e:
+        _asyncio.run_coroutine_threadsafe(
+            bot.send_message(chat_id_bot, f'❌ Ошибка папки: {e}'), main_loop)
+        return
 
     if not chats:
         _asyncio.run_coroutine_threadsafe(
