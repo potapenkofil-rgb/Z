@@ -20,3 +20,7 @@ pending_gflood: dict = {}
 # Глобальная дедупликация чеков — чтобы один чек не активировался дважды,
 # даже если его увидели несколько аккаунтов одновременно
 _globally_processed: set = set()
+
+# User IDs, для которых тред уже запущен но ещё не добавил себя в userbot_refs
+# Защита от race condition при двойном вызове connect_and_run
+_launching: set = set()

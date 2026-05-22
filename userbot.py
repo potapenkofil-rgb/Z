@@ -9,7 +9,7 @@ from telethon.tl.functions.messages import GetDialogFiltersRequest
 
 from config import BOT_USER_ID, PROXY, bot
 from sessions import load_meta, save_meta
-from state import _globally_processed, active, pending_gflood, userbot_refs
+from state import _globally_processed, _launching, active, pending_gflood, userbot_refs
 from tasks import (
     FloodTask,
     _id_gen,
@@ -223,6 +223,7 @@ def run_client_in_thread(user_id: int, api_id: int, api_hash: str,
         await client.connect()
 
         if not await client.is_user_authorized():
+            _launching.discard(user_id)
             print(f'[{user_id}] не авторизован')
             if notify_restore:
                 asyncio.run_coroutine_threadsafe(
@@ -253,6 +254,7 @@ def run_client_in_thread(user_id: int, api_id: int, api_hash: str,
 
         loop = asyncio.get_running_loop()
         userbot_refs[user_id] = {'client': client, 'loop': loop, 'main_loop': main_loop}
+        _launching.discard(user_id)
         is_checker = (user_id == -1)   # аккаунт-ловец чеков
 
         async def try_claim(msg):
@@ -338,11 +340,12 @@ async def connect_and_run(user_id: int, api_id: int, api_hash: str,
                           notify_restore: bool = False) -> bool:
     """Запускает userbot-тред если файл сессии существует.
     Проверка авторизации происходит внутри треда — без второго клиента на тот же файл.
-    Если тред уже запущен — не запускает повторно (иначе database is locked)."""
-    if user_id in userbot_refs:
+    Если тред уже запущен или запускается — не запускает повторно (иначе database is locked)."""
+    if user_id in userbot_refs or user_id in _launching:
         return True
     sf = session_file or f'sessions/{user_id}'
     if not os.path.exists(sf + '.session'):
         return False
+    _launching.add(user_id)
     launch_checker(user_id, api_id, api_hash, chat_id, session_file, notify_restore)
     return True

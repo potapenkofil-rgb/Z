@@ -1,6 +1,7 @@
 import asyncio
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 
 from state import pending_gflood, userbot_refs
@@ -28,11 +29,14 @@ async def cb_tasks_page(callback: CallbackQuery):
         return
     page = int(suffix)
     uid  = callback.from_user.id
-    await callback.message.edit_text(
-        _tasks_page_text(uid, page),
-        parse_mode='HTML',
-        reply_markup=_tasks_page_kb(uid, page),
-    )
+    try:
+        await callback.message.edit_text(
+            _tasks_page_text(uid, page),
+            parse_mode='HTML',
+            reply_markup=_tasks_page_kb(uid, page),
+        )
+    except TelegramBadRequest:
+        pass
     await callback.answer()
 
 
