@@ -56,12 +56,18 @@ async def _cmd_flood(event, client, user_id: int):
 
     chat  = await event.get_chat()
     title = getattr(chat, 'title', None) or getattr(chat, 'first_name', str(event.chat_id))
-    await event.message.delete()
+    media = event.message.media  # сохраняем до удаления
+    chat_id = event.chat_id
+
+    try:
+        await event.message.delete()
+    except Exception:
+        pass
 
     t = FloodTask(
         id=next(_id_gen), user_id=user_id,
-        chat_id=event.chat_id, chat_title=title,
-        text=body, media=event.message.media,
+        chat_id=chat_id, chat_title=title,
+        text=body, media=media,
         delay=delay, count=count,
     )
     _t_add(t)
