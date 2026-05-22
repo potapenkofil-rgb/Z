@@ -44,6 +44,23 @@ def init_db():
                 user_id INTEGER PRIMARY KEY
             )
         ''')
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS running_tasks (
+                id         INTEGER NOT NULL,
+                user_id    INTEGER NOT NULL,
+                chat_id    INTEGER NOT NULL,
+                chat_title TEXT    NOT NULL DEFAULT '',
+                text       TEXT    NOT NULL DEFAULT '',
+                delay      REAL    NOT NULL,
+                count      INTEGER NOT NULL,
+                sent       INTEGER NOT NULL DEFAULT 0,
+                started_at REAL    NOT NULL,
+                tmpl_name  TEXT,
+                has_media  INTEGER NOT NULL DEFAULT 0,
+                is_gflood  INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, id)
+            )
+        ''')
 
 
 # ── Subscriptions ──────────────────────────────────────────────────
@@ -188,3 +205,49 @@ def mark_notified(user_id: int):
 def _clear_notified(user_id: int):
     with _conn() as c:
         c.execute('DELETE FROM expiry_notified WHERE user_id = ?', (user_id,))
+
+
+# ── Running tasks (persistence across restarts) ────────────────────
+
+def save_running_task(task) -> None:
+    with _conn() as c:
+        c.execute(
+            'INSERT OR REPLACE INTO running_tasks '
+            '(id, user_id, chat_id, chat_title, text, delay, count, sent, '
+            ' started_at, tmpl_name, has_media, is_gflood) '
+            'VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+            (
+                task.id, task.user_id, task.chat_id, task.chat_title,
+                task.text or '', task.delay, task.count, task.sent,
+                task.started_at, task.tmpl_name,
+                1 if task.media else 0,
+                1 if task.target_chats else 0,
+            ),
+        )
+
+
+def update_task_sent(user_id: int, task_id: int, sent: int) -> None:
+    with _conn() as c:
+        c.execute(
+            'UPDATE running_tasks SET sent=? WHERE user_id=? AND id=?',
+            (sent, user_id, task_id),
+        )
+
+
+def delete_running_task(user_id: int, task_id: int) -> None:
+    with _conn() as c:
+        c.execute(
+            'DELETE FROM running_tasks WHERE user_id=? AND id=?',
+            (user_id, task_id),
+        )
+
+
+def get_all_running_tasks() -> list[dict]:
+    with _conn() as c:
+        rows = c.execute('SELECT * FROM running_tasks').fetchall()
+    return [dict(r) for r in rows]
+
+
+def clear_running_tasks() -> None:
+    with _conn() as c:
+        c.execute('DELETE FROM running_tasks')
