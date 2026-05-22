@@ -27,6 +27,11 @@ def init_db():
                 created_at INTEGER NOT NULL
             )
         ''')
+        # Миграция: добавляем days если таблица уже существовала без неё
+        try:
+            c.execute('ALTER TABLE pending_invoices ADD COLUMN days INTEGER NOT NULL DEFAULT 30')
+        except Exception:
+            pass
         c.execute('''
             CREATE TABLE IF NOT EXISTS banned_users (
                 user_id   INTEGER PRIMARY KEY,
