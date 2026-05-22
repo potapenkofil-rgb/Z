@@ -288,13 +288,10 @@ async def _send_tasks_list(chat_id: int, uid: int):
 async def _launch_gflood(client, user_id: int, folder_id: int,
                           cfg: dict, chat_id_bot: int, main_loop):
     import asyncio as _asyncio
-    from telethon.tl.types import (
-        Channel, Chat, User,
-        InputPeerChannel, InputPeerChat, InputPeerUser,
-    )
+    from telethon.tl.types import Channel, Chat, User
 
     chats = []
-    diag_lines = []
+    skipped = 0
     try:
         res    = await client(GetDialogFiltersRequest())
         folder = next((f for f in res.filters if getattr(f, 'id', None) == folder_id), None)
@@ -303,45 +300,38 @@ async def _launch_gflood(client, user_id: int, folder_id: int,
                 bot.send_message(chat_id_bot, '❌ Папка не найдена'), main_loop)
             return
 
-        # Дамп всех атрибутов фильтра
-        diag_lines.append(f'тип папки: {type(folder).__name__}')
-        for attr in ('contacts','non_contacts','groups','broadcasts','bots',
-                     'exclude_muted','exclude_read','exclude_archived'):
-            diag_lines.append(f'  {attr}: {getattr(folder, attr, "—")}')
-        diag_lines.append(f'include_peers ({len(getattr(folder, "include_peers", []))}):')
-        for p in getattr(folder, 'include_peers', []):
-            diag_lines.append(f'  {type(p).__name__}: {p.to_dict()}')
+        # Все три списка пиров в папке (pinned, include, exclude)
+        # DialogFilterChatlist не имеет exclude_peers — getattr вернёт []
+        include_peers = list(getattr(folder, 'pinned_peers', [])) + \
+                        list(getattr(folder, 'include_peers', []))
+        exclude_peers = list(getattr(folder, 'exclude_peers', []))
 
-        # Пробуем разрешить каждый peer напрямую
-        diag_lines.append('Резолвинг include_peers:')
-        for peer in getattr(folder, 'include_peers', []):
-            try:
-                entity = await client.get_entity(peer)
-                name = getattr(entity, 'title', None) or getattr(entity, 'first_name', '?')
-                diag_lines.append(f'  ✅ {name} (id={entity.id}, type={type(entity).__name__})')
-                chats.append(entity)
-            except Exception as ex:
-                diag_lines.append(f'  ❌ {peer.to_dict()}: {ex}')
-
-        # ID явно исключённых
         exclude_ids = set()
-        for peer in getattr(folder, 'exclude_peers', []):
+        for peer in exclude_peers:
             pid = (getattr(peer, 'channel_id', None)
                    or getattr(peer, 'chat_id', None)
                    or getattr(peer, 'user_id', None))
             if pid:
                 exclude_ids.add(pid)
 
-        include_ids = {e.id for e in chats}
+        # Резолвим явные peers
+        for peer in include_peers:
+            try:
+                entity = await client.get_entity(peer)
+                chats.append(entity)
+            except Exception:
+                skipped += 1
+                continue
 
-        # Флаги категорий
+        include_ids = {getattr(e, 'id', None) for e in chats}
+
+        # Категорийные флаги (только для DialogFilter, не для Chatlist)
         f_contacts     = getattr(folder, 'contacts',     False)
         f_non_contacts = getattr(folder, 'non_contacts', False)
         f_groups       = getattr(folder, 'groups',       False)
         f_broadcasts   = getattr(folder, 'broadcasts',   False)
         f_bots         = getattr(folder, 'bots',         False)
 
-        added_by_flags = 0
         if any([f_contacts, f_non_contacts, f_groups, f_broadcasts, f_bots]):
             all_dialogs = await client.get_dialogs(limit=None)
             for d in all_dialogs:
@@ -371,22 +361,16 @@ async def _launch_gflood(client, user_id: int, folder_id: int,
                     if matched:
                         chats.append(e)
                         include_ids.add(eid)
-                        added_by_flags += 1
                 except Exception:
                     continue
-        diag_lines.append(f'добавлено по флагам: {added_by_flags}')
-        diag_lines.append(f'ИТОГО: {len(chats)}')
-
-        _asyncio.run_coroutine_threadsafe(
-            bot.send_message(chat_id_bot, '🔍 Диагностика:\n' + '\n'.join(diag_lines)),
-            main_loop)
     except Exception as e:
         _asyncio.run_coroutine_threadsafe(
-            bot.send_message(chat_id_bot, f'❌ Ошибка папки: {e}\n\n' + '\n'.join(diag_lines)),
-            main_loop)
+            bot.send_message(chat_id_bot, f'❌ Ошибка папки: {e}'), main_loop)
         return
 
     if not chats:
+        _asyncio.run_coroutine_threadsafe(
+            bot.send_message(chat_id_bot, '❌ В папке нет доступных чатов'), main_loop)
         return
 
     mode_label = 'одновременно' if cfg['mode'] == 's' else 'по очереди'
