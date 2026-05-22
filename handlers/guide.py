@@ -14,6 +14,7 @@ def _guide_main_kb() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text='📁 gFlood', callback_data='guide_gflood'),
         ],
         [InlineKeyboardButton(text='📋 Задачи',    callback_data='guide_tasks')],
+        [InlineKeyboardButton(text='🔧 Прочие',    callback_data='guide_misc')],
         [InlineKeyboardButton(text='◀️ Меню',      callback_data='menu_main')],
     ])
 
@@ -88,6 +89,30 @@ async def cb_guide_tasks(callback: CallbackQuery):
         '<code>/floodstop</code>\n'
         '→ остановить все рассылки в текущем чате\n\n'
         '💡 На карточке задачи есть кнопки паузы и стопа'
+    )
+    await callback.message.edit_text(text, parse_mode='HTML', reply_markup=_back_kb())
+    await callback.answer()
+
+
+@router.callback_query(F.data == 'guide_misc')
+async def cb_guide_misc(callback: CallbackQuery):
+    text = (
+        '🔧 <b>Прочие команды</b>\n\n'
+        '<code>/ping</code>\n'
+        '→ проверить задержку соединения\n'
+        '💡 В чате с ботом остаётся, в других чатах удаляется через 1 сек\n\n'
+        '<code>/noflood</code>\n'
+        '→ добавить текущий чат в чёрный список\n'
+        '(flood и gflood не будут отправлять сюда)\n\n'
+        '<code>/blacklist</code>\n'
+        '→ показать чёрный список чатов\n\n'
+        '<code>/template [название] [текст]</code>\n'
+        '→ сохранить шаблон сообщения\n'
+        'Пример: <code>/template привет Добрый день!</code>\n\n'
+        '<code>/templates</code>\n'
+        '→ список шаблонов с управлением\n\n'
+        '💡 Шаблон можно использовать в flood:\n'
+        '<code>/flood 3 10 --tmpl привет</code>'
     )
     await callback.message.edit_text(text, parse_mode='HTML', reply_markup=_back_kb())
     await callback.answer()
