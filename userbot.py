@@ -52,7 +52,7 @@ async def _on_outgoing(event, client, user_id: int, chat_id_bot: int, main_loop)
     elif cmd == '/templates': await _cmd_templates(event, user_id, chat_id_bot, main_loop)
     elif cmd == '/noflood':   await _cmd_noflood(event, client, user_id)
     elif cmd == '/blacklist': await _cmd_blacklist(event, user_id, chat_id_bot, main_loop)
-    elif cmd == '/ping':      await _cmd_ping(event, user_id)
+    elif cmd == '/ping':      await _cmd_ping(event, client, user_id)
 
 
 def _apply_tmpl(body: str, user_id: int) -> tuple[str | None, str | None]:
@@ -328,7 +328,7 @@ async def _cmd_blacklist(event, user_id: int, chat_id_bot: int, main_loop):
         main_loop)
 
 
-async def _cmd_ping(event, user_id: int):
+async def _cmd_ping(event, client, user_id: int):
     import time
     from config import BOT_USER_ID
     is_bot_chat = event.chat_id == BOT_USER_ID
