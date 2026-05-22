@@ -52,13 +52,14 @@ async def _on_outgoing(event, client, user_id: int, chat_id_bot: int, main_loop)
     elif cmd == '/blacklist': await _cmd_blacklist(event, user_id, chat_id_bot, main_loop)
 
 
-def _apply_tmpl(body: str, user_id: int) -> str | None:
-    """Если body начинается с --tmpl NAME, подставляет текст шаблона."""
+def _apply_tmpl(body: str, user_id: int) -> tuple[str | None, str | None]:
+    """Если body начинается с --tmpl NAME, подставляет текст шаблона.
+    Возвращает (text, tmpl_name). text=None если шаблон не найден."""
     if body.startswith('--tmpl '):
         name = body[7:].strip()
         tmpl = get_template(user_id, name)
-        return tmpl  # None если не найден
-    return body
+        return (tmpl, name if tmpl is not None else None)
+    return (body, None)
 
 
 async def _cmd_flood(event, client, user_id: int):
@@ -70,7 +71,7 @@ async def _cmd_flood(event, client, user_id: int):
         body  = parts[3] if len(parts) > 3 else ''
     except (IndexError, ValueError):
         return
-    body = _apply_tmpl(body, user_id)
+    body, tmpl_name = _apply_tmpl(body, user_id)
     if body is None:
         await event.message.edit('❌ Шаблон не найден')
         await asyncio.sleep(1)
@@ -92,6 +93,7 @@ async def _cmd_flood(event, client, user_id: int):
         chat_id=chat_id, chat_title=title,
         text=body, media=media,
         delay=delay, count=count,
+        tmpl_name=tmpl_name,
     )
     _t_add(t)
     t.asyncio_task = asyncio.get_running_loop().create_task(run_flood(t, client))
@@ -132,7 +134,7 @@ async def _cmd_gflood(event, client, user_id: int, chat_id_bot: int, main_loop):
         body  = parts[4] if len(parts) > 4 else ''
     except (IndexError, ValueError):
         return
-    body = _apply_tmpl(body, user_id)
+    body, tmpl_name = _apply_tmpl(body, user_id)
     if body is None:
         await event.message.edit('❌ Шаблон не найден')
         await asyncio.sleep(1)
@@ -157,7 +159,7 @@ async def _cmd_gflood(event, client, user_id: int, chat_id_bot: int, main_loop):
 
     pending_gflood[user_id] = {
         'delay': delay, 'count': count, 'mode': mode,
-        'text':  body,  'media': media,
+        'text':  body,  'media': media, 'tmpl_name': tmpl_name,
     }
 
     rows = [
@@ -259,18 +261,14 @@ async def _cmd_templates(event, user_id: int, chat_id_bot: int, main_loop):
             bot.send_message(chat_id_bot, '📋 Шаблонов нет'), main_loop)
         return
     from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-    lines = []
-    for name, text in tmpls:
-        preview = text[:40] + '…' if len(text) > 40 else text
-        lines.append(f'<code>{name}</code>: {preview}')
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f'❌ {name}', callback_data=f'tmpl_del_{name}')]
-        for name, _ in tmpls
+        [InlineKeyboardButton(text=name, callback_data=f'tmpl_view_{rowid}')]
+        for rowid, name, _ in tmpls
     ] + [[InlineKeyboardButton(text='◀️ Меню', callback_data='menu_main')]])
     asyncio.run_coroutine_threadsafe(
         bot.send_message(
             chat_id_bot,
-            '📋 <b>Шаблоны:</b>\n\n' + '\n'.join(lines),
+            '📋 <b>Шаблоны:</b>',
             parse_mode='HTML', reply_markup=kb,
         ),
         main_loop)

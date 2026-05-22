@@ -18,7 +18,7 @@ from subscriptions import (
 from templates import init_templates_db
 from userbot import connect_and_run
 
-from handlers import admin, auth, callbacks, guide, start, subscription
+from handlers import admin, auth, callbacks, guide, start, subscription, templates
 
 # ─────────────────────────────────────────────────────────────────
 # Register routers
@@ -30,6 +30,7 @@ dp.include_router(admin.router)
 dp.include_router(guide.router)
 dp.include_router(subscription.router)
 dp.include_router(callbacks.router)
+dp.include_router(templates.router)
 
 # ─────────────────────────────────────────────────────────────────
 # Ban middleware

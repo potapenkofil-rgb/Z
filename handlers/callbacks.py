@@ -5,7 +5,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 
 from state import pending_gflood, userbot_refs
-from templates import delete_template, remove_from_blacklist
+from templates import remove_from_blacklist
 from tasks import (
     _card_kb,
     _card_text,
@@ -135,21 +135,6 @@ async def cb_gflood_folder(callback: CallbackQuery):
                        callback.message.chat.id, ref['main_loop']),
         ref['loop'],
     )
-
-
-# ─────────────────────────────────────────────────────────────────
-# Template management
-# ─────────────────────────────────────────────────────────────────
-
-@router.callback_query(F.data.startswith('tmpl_del_'))
-async def cb_tmpl_del(callback: CallbackQuery):
-    name = callback.data[9:]
-    uid  = callback.from_user.id
-    if delete_template(uid, name):
-        await callback.answer(f'✅ Шаблон {name} удалён')
-    else:
-        await callback.answer('Не найден')
-    await callback.message.delete()
 
 
 # ─────────────────────────────────────────────────────────────────

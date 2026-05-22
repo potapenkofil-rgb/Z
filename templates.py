@@ -48,13 +48,33 @@ def get_template(user_id: int, name: str) -> str | None:
     return row['text'] if row else None
 
 
-def list_templates(user_id: int) -> list[tuple[str, str]]:
+def list_templates(user_id: int) -> list[tuple[int, str, str]]:
+    """Returns [(rowid, name, text), ...]"""
     with _conn() as c:
         rows = c.execute(
-            'SELECT name, text FROM templates WHERE user_id=? ORDER BY name',
+            'SELECT rowid, name, text FROM templates WHERE user_id=? ORDER BY name',
             (user_id,),
         ).fetchall()
-    return [(r['name'], r['text']) for r in rows]
+    return [(r['rowid'], r['name'], r['text']) for r in rows]
+
+
+def get_template_by_rowid(rowid: int, user_id: int) -> tuple[str, str] | None:
+    """Returns (name, text) or None."""
+    with _conn() as c:
+        row = c.execute(
+            'SELECT name, text FROM templates WHERE rowid=? AND user_id=?',
+            (rowid, user_id),
+        ).fetchone()
+    return (row['name'], row['text']) if row else None
+
+
+def update_template(rowid: int, user_id: int, new_name: str, new_text: str) -> bool:
+    with _conn() as c:
+        cur = c.execute(
+            'UPDATE templates SET name=?, text=? WHERE rowid=? AND user_id=?',
+            (new_name, new_text, rowid, user_id),
+        )
+    return cur.rowcount > 0
 
 
 def delete_template(user_id: int, name: str) -> bool:
@@ -62,6 +82,15 @@ def delete_template(user_id: int, name: str) -> bool:
         cur = c.execute(
             'DELETE FROM templates WHERE user_id=? AND name=?',
             (user_id, name),
+        )
+    return cur.rowcount > 0
+
+
+def delete_template_by_rowid(rowid: int, user_id: int) -> bool:
+    with _conn() as c:
+        cur = c.execute(
+            'DELETE FROM templates WHERE rowid=? AND user_id=?',
+            (rowid, user_id),
         )
     return cur.rowcount > 0
 

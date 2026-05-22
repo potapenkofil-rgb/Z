@@ -32,6 +32,7 @@ class FloodTask:
     asyncio_task: Any  = dataclasses.field(default=None, repr=False)
     target_chats: Optional[list] = None   # gflood
     gflood_mode:  Optional[str]  = None   # 's' | 'o'
+    tmpl_name:    Optional[str]  = None   # template used at task creation
 
     @property
     def elapsed(self) -> float:
@@ -76,6 +77,9 @@ def _t_resume_all(uid: int):
 
 def _t_by_chat(uid: int, cid: int) -> list[FloodTask]:
     return [t for t in _t_all(uid) if t.chat_id == cid and not t.stopped]
+
+def _t_by_tmpl(uid: int, tmpl_name: str) -> list[FloodTask]:
+    return [t for t in _t_all(uid) if t.tmpl_name == tmpl_name and not t.stopped]
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -416,6 +420,7 @@ async def _launch_gflood(client, user_id: int, folder_id: int,
         text=cfg['text'], media=cfg['media'],
         delay=cfg['delay'], count=cfg['count'],
         target_chats=chats, gflood_mode=cfg['mode'],
+        tmpl_name=cfg.get('tmpl_name'),
     )
     _t_add(t)
     t.asyncio_task = _asyncio.get_running_loop().create_task(run_gflood(t, client))
