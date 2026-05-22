@@ -8,6 +8,7 @@ from telethon import TelegramClient, events
 from telethon.tl.functions.messages import GetDialogFiltersRequest
 
 from config import BOT_USER_ID, PROXY, bot
+from subscriptions import has_active_sub
 from sessions import load_meta, save_meta
 from state import _globally_processed, _launching, active, pending_gflood, userbot_refs
 from templates import (
@@ -59,14 +60,16 @@ async def _on_outgoing(event, client, user_id: int, chat_id_bot: int, main_loop)
         print(f'[{user_id}] ошибка команды: {e}')
 
 
-def _apply_tmpl(body: str, user_id: int) -> tuple[str | None, str | None]:
-    """Если body начинается с --tmpl NAME, подставляет текст шаблона.
-    Возвращает (text, tmpl_name). text=None если шаблон не найден."""
+def _apply_tmpl(body: str, user_id: int) -> tuple[str | None, str | None, str | None]:
+    """Если body начинается с --tmpl NAME, подставляет текст/медиа шаблона.
+    Возвращает (text, media_path, tmpl_name). text=None если шаблон не найден."""
     if body.startswith('--tmpl '):
         name = body[7:].strip()
         tmpl = get_template(user_id, name)
-        return (tmpl, name if tmpl is not None else None)
-    return (body, None)
+        if tmpl is None:
+            return (None, None, name)
+        return (tmpl['text'], tmpl['media_path'], name)
+    return (body, None, None)
 
 
 async def _cmd_flood(event, client, user_id: int):
@@ -83,7 +86,7 @@ async def _cmd_flood(event, client, user_id: int):
     prefix     = text[: len(text) - len(body)] if body else text
     body_ents  = _slice_entities(event.message.entities or [], _utf16_len(prefix))
 
-    body, tmpl_name = _apply_tmpl(body, user_id)
+    body, tmpl_media, tmpl_name = _apply_tmpl(body, user_id)
     if body is None:
         await event.message.edit('❌ Шаблон не найден')
         await asyncio.sleep(1)
@@ -92,9 +95,18 @@ async def _cmd_flood(event, client, user_id: int):
     if tmpl_name:
         body_ents = []  # шаблон хранится как plain text
 
+    if not has_active_sub(user_id) and len(_t_all(user_id)) >= 1:
+        await event.message.edit(
+            '❌ Без подписки — только 1 задача одновременно.\n\n'
+            'Открой бота и перейди в 💎 Подписка'
+        )
+        await asyncio.sleep(3)
+        await event.message.delete()
+        return
+
     chat  = await event.get_chat()
     title = getattr(chat, 'title', None) or getattr(chat, 'first_name', str(event.chat_id))
-    media = event.message.media
+    media = tmpl_media or event.message.media
     chat_id = event.chat_id
 
     try:
@@ -152,7 +164,7 @@ async def _cmd_gflood(event, client, user_id: int, chat_id_bot: int, main_loop):
     prefix    = text[: len(text) - len(body)] if body else text
     body_ents = _slice_entities(event.message.entities or [], _utf16_len(prefix))
 
-    body, tmpl_name = _apply_tmpl(body, user_id)
+    body, tmpl_media, tmpl_name = _apply_tmpl(body, user_id)
     if body is None:
         await event.message.edit('❌ Шаблон не найден')
         await asyncio.sleep(1)
@@ -161,7 +173,16 @@ async def _cmd_gflood(event, client, user_id: int, chat_id_bot: int, main_loop):
     if tmpl_name:
         body_ents = []  # шаблон хранится как plain text
 
-    media = event.message.media   # сохраняем до удаления
+    if not has_active_sub(user_id) and len(_t_all(user_id)) >= 1:
+        await event.message.edit(
+            '❌ Без подписки — только 1 задача одновременно.\n\n'
+            'Открой бота и перейди в 💎 Подписка'
+        )
+        await asyncio.sleep(3)
+        await event.message.delete()
+        return
+
+    media = tmpl_media or event.message.media   # сохраняем до удаления
     await event.message.delete()
 
     try:

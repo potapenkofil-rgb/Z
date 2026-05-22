@@ -2,8 +2,9 @@ import time
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+import config
 from config import SUB_TIERS
 from cryptopay import create_invoice
 from subscriptions import add_pending_invoice, get_expiry, has_active_sub
@@ -37,8 +38,9 @@ def _sub_status_text(user_id: int) -> str:
 def _sub_kb(user_id: int) -> InlineKeyboardMarkup:
     label = '💳 Продлить' if has_active_sub(user_id) else '💳 Купить подписку'
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=label,    callback_data='sub_buy')],
-        [InlineKeyboardButton(text='◀️ Меню', callback_data='menu_main')],
+        [InlineKeyboardButton(text=label,              callback_data='sub_buy')],
+        [InlineKeyboardButton(text='👥 Пригласить друга', callback_data='sub_ref')],
+        [InlineKeyboardButton(text='◀️ Меню',            callback_data='menu_main')],
     ])
 
 
@@ -49,6 +51,45 @@ async def cb_sub_menu(callback: CallbackQuery):
         await callback.message.edit_text(
             _sub_status_text(uid), parse_mode='HTML',
             reply_markup=_sub_kb(uid),
+        )
+    except TelegramBadRequest:
+        pass
+    await callback.answer()
+
+
+@router.message(F.text == '/ref')
+async def cmd_ref(message: Message):
+    uid      = message.from_user.id
+    username = config.BOT_USERNAME
+    if not username:
+        await message.answer('❌ Реферальная ссылка недоступна — бот ещё запускается.')
+        return
+    link = f'https://t.me/{username}?start=ref_{uid}'
+    await message.answer(
+        f'👥 <b>Реферальная программа</b>\n\n'
+        f'Поделись ссылкой с другом. Когда он купит подписку — ты получишь <b>+5 дней</b> бесплатно!\n\n'
+        f'🔗 Твоя ссылка:\n<code>{link}</code>',
+        parse_mode='HTML',
+    )
+
+
+@router.callback_query(F.data == 'sub_ref')
+async def cb_sub_ref(callback: CallbackQuery):
+    uid      = callback.from_user.id
+    username = config.BOT_USERNAME
+    if not username:
+        await callback.answer('Реферальная ссылка пока недоступна', show_alert=True)
+        return
+    link = f'https://t.me/{username}?start=ref_{uid}'
+    try:
+        await callback.message.edit_text(
+            f'👥 <b>Реферальная программа</b>\n\n'
+            f'Поделись ссылкой с другом. Когда он купит подписку — ты получишь <b>+5 дней</b> бесплатно!\n\n'
+            f'🔗 Твоя ссылка:\n<code>{link}</code>',
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text='◀️ Назад', callback_data='sub_menu')],
+            ]),
         )
     except TelegramBadRequest:
         pass

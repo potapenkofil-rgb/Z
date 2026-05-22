@@ -17,6 +17,7 @@ ADMINS_FILE    = 'sessions/admins.json'
 SUBS_DB        = 'sessions/subs.db'
 SUPER_ADMIN_ID = 7835543351
 BOT_USER_ID    = int(BOT_TOKEN.split(':')[0])
+BOT_USERNAME: str = ''  # filled at startup in main.py
 
 # CryptoBot API — перегенерируй в @CryptoBot → My Apps если токен утёк
 CRYPTOBOT_TOKEN = os.environ.get('CRYPTOBOT_TOKEN', '585675:AArQXR1y4cgjjVuv5377jscqGAHWJT6bATJ')

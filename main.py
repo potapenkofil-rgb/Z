@@ -6,15 +6,18 @@ from aiogram.types import CallbackQuery, Message
 from config import bot, dp
 from cryptopay import get_invoice
 from sessions import is_admin, load_meta
+import config
 from subscriptions import (
     clear_running_tasks,
     extend_sub,
     get_all_running_tasks,
     get_expiring_soon,
     get_pending_invoices,
+    get_referral_inviter,
     init_db,
     is_banned,
     mark_notified,
+    mark_referral_rewarded,
     remove_pending_invoice,
 )
 from templates import init_templates_db
@@ -99,6 +102,20 @@ async def poll_invoices():
                             )
                         except Exception:
                             pass
+                        # Реферальная награда
+                        try:
+                            inviter_id = get_referral_inviter(user_id)
+                            if inviter_id:
+                                extend_sub(inviter_id, 5 * 86400)
+                                mark_referral_rewarded(user_id)
+                                await bot.send_message(
+                                    inviter_id,
+                                    '🎁 <b>Твой друг купил подписку!</b>\n\n'
+                                    'Тебе начислено <b>+5 дней</b> подписки.',
+                                    parse_mode='HTML',
+                                )
+                        except Exception:
+                            pass
                     elif status == 'expired':
                         remove_pending_invoice(invoice_id)
                 except Exception as e:
@@ -176,6 +193,11 @@ async def _supervised(coro_fn, name: str):
 async def main():
     init_db()
     init_templates_db()
+    try:
+        me = await bot.get_me()
+        config.BOT_USERNAME = me.username or ''
+    except Exception:
+        pass
     await notify_interrupted_tasks()
     await restore_all_sessions()
     asyncio.create_task(_supervised(poll_invoices,    'poll_invoices'))
