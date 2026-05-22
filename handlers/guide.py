@@ -122,10 +122,12 @@ async def cb_guide_ping(callback: CallbackQuery):
 async def cb_guide_noflood(callback: CallbackQuery):
     text = (
         '🚫 <b>/noflood — запрет рассылки в чат</b>\n\n'
-        'Добавляет текущий чат в чёрный список.\n'
-        'Flood и gflood не будут отправлять сюда.\n\n'
+        'Добавляет или убирает текущий чат из чёрного списка.\n'
+        'Flood и gflood не будут отправлять в заблокированные чаты.\n\n'
         '<b>Использование:</b>\n'
-        '<code>/noflood</code> — написать прямо в нужном чате\n\n'
+        '<code>/noflood</code> — добавить чат в чёрный список\n'
+        '<code>/noflood off</code> — убрать чат из чёрного списка\n\n'
+        '💡 Команды пишите прямо в нужном чате\n'
         '💡 Управлять списком можно через <code>/blacklist</code>'
     )
     await callback.message.edit_text(text, parse_mode='HTML', reply_markup=_back_kb())
