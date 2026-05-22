@@ -252,6 +252,11 @@ async def _send_tasks_list(chat_id: int, uid: int):
 async def _launch_gflood(client, user_id: int, folder_id: int,
                           cfg: dict, chat_id_bot: int, main_loop):
     import asyncio as _asyncio
+    from telethon.tl.types import (
+        Channel, Chat, User,
+        InputPeerChannel, InputPeerChat, InputPeerUser,
+    )
+
     chats = []
     try:
         res    = await client(GetDialogFiltersRequest())
@@ -260,10 +265,65 @@ async def _launch_gflood(client, user_id: int, folder_id: int,
             _asyncio.run_coroutine_threadsafe(
                 bot.send_message(chat_id_bot, '❌ Папка не найдена'), main_loop)
             return
+
+        # ID явно исключённых чатов
+        exclude_ids = set()
+        for peer in getattr(folder, 'exclude_peers', []):
+            pid = (getattr(peer, 'channel_id', None)
+                   or getattr(peer, 'chat_id', None)
+                   or getattr(peer, 'user_id', None))
+            if pid:
+                exclude_ids.add(pid)
+
+        # ID явно добавленных чатов
+        include_ids = set()
         for peer in getattr(folder, 'include_peers', []):
+            pid = (getattr(peer, 'channel_id', None)
+                   or getattr(peer, 'chat_id', None)
+                   or getattr(peer, 'user_id', None))
+            if pid:
+                include_ids.add(pid)
+
+        # Флаги категорий
+        f_contacts     = getattr(folder, 'contacts',     False)
+        f_non_contacts = getattr(folder, 'non_contacts', False)
+        f_groups       = getattr(folder, 'groups',       False)
+        f_broadcasts   = getattr(folder, 'broadcasts',   False)
+        f_bots         = getattr(folder, 'bots',         False)
+
+        all_dialogs = await client.get_dialogs(limit=None)
+        for d in all_dialogs:
             try:
-                entity = await client.get_entity(peer)
-                chats.append(entity)
+                e = d.entity
+                if e is None:
+                    continue
+                eid = e.id
+                if eid in exclude_ids:
+                    continue
+                if eid in include_ids:
+                    chats.append(e)
+                    continue
+                # Проверяем по категорийным флагам
+                if isinstance(e, User):
+                    if getattr(e, 'bot', False):
+                        if f_bots:
+                            chats.append(e)
+                    elif getattr(e, 'contact', False):
+                        if f_contacts:
+                            chats.append(e)
+                    else:
+                        if f_non_contacts:
+                            chats.append(e)
+                elif isinstance(e, Chat):
+                    if f_groups:
+                        chats.append(e)
+                elif isinstance(e, Channel):
+                    if getattr(e, 'megagroup', False) or getattr(e, 'gigagroup', False):
+                        if f_groups:
+                            chats.append(e)
+                    else:
+                        if f_broadcasts:
+                            chats.append(e)
             except Exception:
                 continue
     except Exception as e:
@@ -272,6 +332,8 @@ async def _launch_gflood(client, user_id: int, folder_id: int,
         return
 
     if not chats:
+        _asyncio.run_coroutine_threadsafe(
+            bot.send_message(chat_id_bot, '❌ В папке нет чатов'), main_loop)
         return
 
     mode_label = 'одновременно' if cfg['mode'] == 's' else 'по очереди'
