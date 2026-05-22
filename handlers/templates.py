@@ -21,9 +21,8 @@ router = Router()
 
 
 class EditTemplate(StatesGroup):
-    rowid    = State()
-    new_name = State()
-    new_text = State()
+    edit_name = State()
+    edit_text = State()
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -55,6 +54,22 @@ def _card_kb(rowid: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text='❌ Удалить',  callback_data=f'tmpl_del_{rowid}'),
         ],
         [InlineKeyboardButton(text='◀️ Назад', callback_data='tmpl_list')],
+    ])
+
+
+def _edit_choice_kb(rowid: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text='✏️ Название', callback_data=f'tmpl_editname_{rowid}'),
+            InlineKeyboardButton(text='📝 Текст',    callback_data=f'tmpl_edittext_{rowid}'),
+        ],
+        [InlineKeyboardButton(text='◀️ Назад', callback_data=f'tmpl_view_{rowid}')],
+    ])
+
+
+def _cancel_kb(rowid: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text='❌ Отмена', callback_data=f'tmpl_view_{rowid}')],
     ])
 
 
@@ -130,11 +145,11 @@ async def cb_tmpl_del(callback: CallbackQuery):
 
 
 # ─────────────────────────────────────────────────────────────────
-# Edit template — FSM
+# Edit template — выбор что менять
 # ─────────────────────────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith('tmpl_edit_'))
-async def cb_tmpl_edit(callback: CallbackQuery, state: FSMContext):
+async def cb_tmpl_edit(callback: CallbackQuery):
     rowid = int(callback.data[10:])
     uid   = callback.from_user.id
     row   = get_template_by_rowid(rowid, uid)
@@ -142,48 +157,51 @@ async def cb_tmpl_edit(callback: CallbackQuery, state: FSMContext):
         await callback.answer('Шаблон не найден')
         return
     name, _ = row
-    await state.set_state(EditTemplate.new_name)
-    await state.update_data(rowid=rowid, old_name=name)
-    await callback.message.edit_text(
-        f'✏️ <b>Изменение шаблона «{name}»</b>\n\n'
-        f'Введите новое название (или <code>-</code> чтобы оставить прежнее):',
-        parse_mode='HTML',
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text='❌ Отмена', callback_data=f'tmpl_view_{rowid}')],
-        ]),
-    )
+    try:
+        await callback.message.edit_text(
+            f'✏️ <b>Изменение шаблона «{name}»</b>\n\nЧто изменить?',
+            parse_mode='HTML',
+            reply_markup=_edit_choice_kb(rowid),
+        )
+    except TelegramBadRequest:
+        pass
     await callback.answer()
 
 
-@router.message(EditTemplate.new_name)
-async def step_tmpl_new_name(message: Message, state: FSMContext):
+# ─────────────────────────────────────────────────────────────────
+# Edit name
+# ─────────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith('tmpl_editname_'))
+async def cb_tmpl_editname(callback: CallbackQuery, state: FSMContext):
+    rowid = int(callback.data[14:])
+    uid   = callback.from_user.id
+    row   = get_template_by_rowid(rowid, uid)
+    if not row:
+        await callback.answer('Шаблон не найден')
+        return
+    name, _ = row
+    await state.set_state(EditTemplate.edit_name)
+    await state.update_data(rowid=rowid, old_name=name)
+    try:
+        await callback.message.edit_text(
+            f'✏️ Введите новое название шаблона:\n\n'
+            f'Текущее: <b>{name}</b>',
+            parse_mode='HTML',
+            reply_markup=_cancel_kb(rowid),
+        )
+    except TelegramBadRequest:
+        pass
+    await callback.answer()
+
+
+@router.message(EditTemplate.edit_name)
+async def step_edit_name(message: Message, state: FSMContext):
     data     = await state.get_data()
     rowid    = data['rowid']
     old_name = data['old_name']
-    new_name = message.text.strip()
-    if new_name == '-':
-        new_name = old_name
-    await state.update_data(new_name=new_name)
-    await state.set_state(EditTemplate.new_text)
-
-    row = get_template_by_rowid(rowid, message.from_user.id)
-    cur_text = row[1] if row else ''
-    await message.answer(
-        f'✏️ Введите новый текст шаблона (или <code>-</code> чтобы оставить прежний):\n\n'
-        f'<blockquote>{cur_text[:300]}</blockquote>',
-        parse_mode='HTML',
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text='❌ Отмена', callback_data=f'tmpl_view_{rowid}')],
-        ]),
-    )
-
-
-@router.message(EditTemplate.new_text)
-async def step_tmpl_new_text(message: Message, state: FSMContext):
-    data     = await state.get_data()
-    rowid    = data['rowid']
-    new_name = data['new_name']
     uid      = message.from_user.id
+    new_name = message.text.strip()
 
     row = get_template_by_rowid(rowid, uid)
     if not row:
@@ -191,17 +209,64 @@ async def step_tmpl_new_text(message: Message, state: FSMContext):
         await message.answer('❌ Шаблон не найден')
         return
 
-    old_text = row[1]
-    new_text = message.text.strip()
-    if new_text == '-':
-        new_text = old_text
-
-    update_template(rowid, uid, new_name, new_text)
+    update_template(rowid, uid, new_name, row[1])
     await state.clear()
 
     tasks = _t_by_tmpl(uid, new_name)
     await message.answer(
-        _card_text(new_name, new_text, tasks),
+        _card_text(new_name, row[1], tasks),
+        parse_mode='HTML',
+        reply_markup=_card_kb(rowid),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────
+# Edit text
+# ─────────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith('tmpl_edittext_'))
+async def cb_tmpl_edittext(callback: CallbackQuery, state: FSMContext):
+    rowid = int(callback.data[14:])
+    uid   = callback.from_user.id
+    row   = get_template_by_rowid(rowid, uid)
+    if not row:
+        await callback.answer('Шаблон не найден')
+        return
+    name, text = row
+    await state.set_state(EditTemplate.edit_text)
+    await state.update_data(rowid=rowid, name=name)
+    try:
+        await callback.message.edit_text(
+            f'📝 Введите новый текст шаблона <b>{name}</b>:\n\n'
+            f'<blockquote>{text[:300]}</blockquote>',
+            parse_mode='HTML',
+            reply_markup=_cancel_kb(rowid),
+        )
+    except TelegramBadRequest:
+        pass
+    await callback.answer()
+
+
+@router.message(EditTemplate.edit_text)
+async def step_edit_text(message: Message, state: FSMContext):
+    data     = await state.get_data()
+    rowid    = data['rowid']
+    name     = data['name']
+    uid      = message.from_user.id
+    new_text = message.text.strip()
+
+    row = get_template_by_rowid(rowid, uid)
+    if not row:
+        await state.clear()
+        await message.answer('❌ Шаблон не найден')
+        return
+
+    update_template(rowid, uid, name, new_text)
+    await state.clear()
+
+    tasks = _t_by_tmpl(uid, name)
+    await message.answer(
+        _card_text(name, new_text, tasks),
         parse_mode='HTML',
         reply_markup=_card_kb(rowid),
     )
