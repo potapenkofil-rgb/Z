@@ -291,9 +291,14 @@ async def adm_step_code(message: Message, state: FSMContext):
     except ValueError:
         await message.answer('Введите числовой код:')
         return
-    data = await state.get_data()
-    key  = f'adm_{message.from_user.id}'
-    cl: TelegramClient = active[key]['client']
+    data  = await state.get_data()
+    key   = f'adm_{message.from_user.id}'
+    entry = active.get(key)
+    if not entry:
+        await state.clear()
+        await message.answer('❌ Сессия истекла. Начните заново.')
+        return
+    cl: TelegramClient = entry['client']
     try:
         await cl.sign_in(data['phone'], code, phone_code_hash=data['phone_code_hash'])
     except PhoneCodeInvalidError:
@@ -313,7 +318,12 @@ async def adm_step_code(message: Message, state: FSMContext):
 async def adm_step_password(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    cl: TelegramClient = active[f'adm_{message.from_user.id}']['client']
+    entry = active.get(f'adm_{message.from_user.id}')
+    if not entry:
+        await state.clear()
+        await message.answer('❌ Сессия истекла. Начните заново.')
+        return
+    cl: TelegramClient = entry['client']
     data = await state.get_data()
     try:
         await cl.sign_in(password=message.text)
@@ -427,11 +437,14 @@ async def step_manage_sub(message: Message, state: FSMContext):
         return
 
     try:
-        entity = await asyncio.wrap_future(
-            asyncio.run_coroutine_threadsafe(
-                ref['client'].get_entity(username),
-                ref['loop'],
-            )
+        entity = await asyncio.wait_for(
+            asyncio.wrap_future(
+                asyncio.run_coroutine_threadsafe(
+                    ref['client'].get_entity(username),
+                    ref['loop'],
+                )
+            ),
+            timeout=15,
         )
         target_id = entity.id
         first = getattr(entity, 'first_name', '') or ''
@@ -440,6 +453,9 @@ async def step_manage_sub(message: Message, state: FSMContext):
         name  = (first + ' ' + last).strip()
         if uname:
             name += f' (@{uname})'
+    except asyncio.TimeoutError:
+        await message.answer('❌ Таймаут: не удалось получить данные за 15 сек')
+        return
     except Exception as e:
         await message.answer(f'❌ Не удалось найти пользователя: {e}')
         return
@@ -598,10 +614,13 @@ async def step_find_user(message: Message, state: FSMContext):
         await message.answer('❌ Нет подключённых аккаунтов. Введи числовой ID.')
         return
     try:
-        entity = await asyncio.wrap_future(
-            asyncio.run_coroutine_threadsafe(
-                ref['client'].get_entity(username), ref['loop']
-            )
+        entity = await asyncio.wait_for(
+            asyncio.wrap_future(
+                asyncio.run_coroutine_threadsafe(
+                    ref['client'].get_entity(username), ref['loop']
+                )
+            ),
+            timeout=15,
         )
         target_id = entity.id
         first = getattr(entity, 'first_name', '') or ''
@@ -610,6 +629,9 @@ async def step_find_user(message: Message, state: FSMContext):
         name  = (first + ' ' + last).strip()
         if uname:
             name += f' (@{uname})'
+    except asyncio.TimeoutError:
+        await message.answer('❌ Таймаут: не удалось получить данные за 15 сек')
+        return
     except Exception as e:
         await message.answer(f'❌ Не удалось найти пользователя: {e}')
         return

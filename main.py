@@ -131,12 +131,22 @@ async def notify_expiring():
 # Entry point
 # ─────────────────────────────────────────────────────────────────
 
+async def _supervised(coro_fn, name: str):
+    """Запускает корутину и перезапускает её при падении."""
+    while True:
+        try:
+            await coro_fn()
+        except Exception as e:
+            print(f'[{name}] упал: {e}, перезапуск через 5 сек')
+            await asyncio.sleep(5)
+
+
 async def main():
     init_db()
     init_templates_db()
     await restore_all_sessions()
-    asyncio.create_task(poll_invoices())
-    asyncio.create_task(notify_expiring())
+    asyncio.create_task(_supervised(poll_invoices,    'poll_invoices'))
+    asyncio.create_task(_supervised(notify_expiring,  'notify_expiring'))
     await dp.start_polling(bot)
 
 
