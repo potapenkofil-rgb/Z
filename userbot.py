@@ -116,6 +116,16 @@ async def _cmd_gflood(event, client, user_id: int, chat_id_bot: int, main_loop):
     try:
         res     = await client(GetDialogFiltersRequest())
         folders = [f for f in res.filters if hasattr(f, 'title')]
+
+        # Диагностика — показываем все папки и их полное состояние
+        dbg = [f'Всего фильтров: {len(res.filters)}']
+        for f in res.filters:
+            dbg.append(f'─ тип={type(f).__name__}, id={getattr(f, "id", "—")}, title={_ftitle(f)!r}')
+            ip = getattr(f, 'include_peers', None)
+            if ip is not None:
+                dbg.append(f'   include_peers={len(ip)}')
+        asyncio.run_coroutine_threadsafe(
+            bot.send_message(chat_id_bot, '🔍 Папки:\n' + '\n'.join(dbg)), main_loop)
     except Exception as e:
         asyncio.run_coroutine_threadsafe(
             bot.send_message(chat_id_bot, f'❌ Не удалось получить папки: {e}'), main_loop)
