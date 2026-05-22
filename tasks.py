@@ -7,7 +7,8 @@ from typing import Any, Optional
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from telethon.tl.functions.messages import GetDialogFiltersRequest
 
-from config import bot
+from config import bot, WATERMARK_TEXT
+from subscriptions import has_active_sub
 
 # ─────────────────────────────────────────────────────────────────
 # FloodTask
@@ -86,11 +87,20 @@ async def _pausable_sleep(task: FloodTask, seconds: float):
             slept += step
 
 
-async def _send_one(client, chat, text: str, media: Any):
+def _apply_watermark(text: str, user_id: int) -> str:
+    """Добавляет рекламу к тексту, если у юзера нет активной подписки."""
+    if has_active_sub(user_id):
+        return text
+    wm = f'**{WATERMARK_TEXT}**'
+    return f'{text}\n\n{wm}' if text else wm
+
+
+async def _send_one(client, chat, text: str, media: Any, user_id: int):
+    final = _apply_watermark(text or '', user_id)
     if media:
-        await client.send_file(chat, media, caption=text or None)
+        await client.send_file(chat, media, caption=final or None)
     else:
-        await client.send_message(chat, text)
+        await client.send_message(chat, final)
 
 
 async def run_flood(task: FloodTask, client):
@@ -101,7 +111,7 @@ async def run_flood(task: FloodTask, client):
             if task.stopped:
                 break
             try:
-                await _send_one(client, task.chat_id, task.text, task.media)
+                await _send_one(client, task.chat_id, task.text, task.media, task.user_id)
                 task.sent += 1
             except Exception as e:
                 print(f'[flood#{task.id}] {e}')
@@ -124,13 +134,13 @@ async def run_gflood(task: FloodTask, client):
 
     async def _send_with_log(c):
         try:
-            await _send_one(client, c, task.text, task.media)
+            await _send_one(client, c, task.text, task.media, task.user_id)
             task.sent += 1
         except Exception as e:
-            name = getattr(c, 'title', None) or getattr(c, 'first_name', str(c))
-            err  = f'[gflood#{task.id}] {name}: {e}'
-            print(err)
-            errors.append(err)
+            name   = getattr(c, 'title', None) or getattr(c, 'first_name', str(c))
+            reason = str(e).split(' (caused by')[0]
+            errors.append(f'{name} — {reason}')
+            print(f'[gflood#{task.id}] {name}: {e}')
 
     try:
         for rnd in range(task.count):
@@ -168,8 +178,8 @@ async def run_gflood(task: FloodTask, client):
                     asyncio.run_coroutine_threadsafe(
                         bot.send_message(
                             task.user_id,
-                            f'⚠️ gflood #{task.id} — ошибки отправки:\n' +
-                            '\n'.join(errors[:10]) +
+                            f'Пропущено ({len(errors)}):\n' +
+                            '\n'.join(f'• {e}' for e in errors[:10]) +
                             (f'\n…и ещё {len(errors)-10}' if len(errors) > 10 else '')
                         ),
                         ref['main_loop'],

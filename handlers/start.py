@@ -11,6 +11,7 @@ from aiogram.types import (
 
 from sessions import is_admin, load_meta, save_meta
 from state import userbot_refs
+from subscriptions import get_expiry, has_active_sub
 from userbot import connect_and_run
 
 router = Router()
@@ -53,13 +54,14 @@ def _main_menu_kb(uid: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text='📱 Мой аккаунт', callback_data='menu_account'),
         ],
         [
-            InlineKeyboardButton(text='📖 Команды', callback_data='guide_main'),
+            InlineKeyboardButton(text='💎 Подписка',  callback_data='sub_menu'),
+            InlineKeyboardButton(text='📖 Команды',   callback_data='guide_main'),
         ],
     ]
     if is_admin(uid):
-        rows[-1].append(
-            InlineKeyboardButton(text='🔐 Админ', callback_data='adm_panel')
-        )
+        rows.append([
+            InlineKeyboardButton(text='🔐 Админ', callback_data='adm_panel'),
+        ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -145,7 +147,13 @@ async def cb_menu_account(callback: CallbackQuery):
         except Exception:
             pass
 
-    # Время регистрации в боте — берём chat_id из meta как косвенный признак
+    # Статус подписки
+    if has_active_sub(uid):
+        days = max(0, (get_expiry(uid) - int(time.time())) // 86400)
+        sub_line = f'💎 <b>Подписка:</b> активна, {days} дн.'
+    else:
+        sub_line = '💎 <b>Подписка:</b> не активна (с водяным знаком)'
+
     text = (
         f'📱 <b>Мой аккаунт</b>\n\n'
         f'👤 <b>Имя:</b> {name}\n'
@@ -153,9 +161,11 @@ async def cb_menu_account(callback: CallbackQuery):
         f'🆔 <b>ID:</b> <code>{user_id_str}</code>\n'
         f'📞 <b>Номер:</b> <code>{phone}</code>\n'
         f'⭐ <b>Premium:</b> {premium}\n'
-        f'🔌 <b>Статус:</b> {status}'
+        f'🔌 <b>Статус:</b> {status}\n'
+        f'{sub_line}'
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text='💎 Подписка',          callback_data='sub_menu')],
         [InlineKeyboardButton(text='❌ Отключить аккаунт', callback_data='menu_disconnect')],
         [InlineKeyboardButton(text='◀️ Меню',              callback_data='menu_main')],
     ])
