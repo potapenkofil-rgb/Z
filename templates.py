@@ -1,78 +1,135 @@
-import os
 import sqlite3
 
-DB_PATH = 'sessions/subs.db'
+from config import SUBS_DB
 
 
 def _conn() -> sqlite3.Connection:
-    os.makedirs('sessions', exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        'CREATE TABLE IF NOT EXISTS templates '
-        '(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, '
-        'name TEXT NOT NULL, text TEXT NOT NULL)'
-    )
-    conn.execute(
-        'CREATE TABLE IF NOT EXISTS blacklist '
-        '(user_id INTEGER NOT NULL, chat_id INTEGER NOT NULL, title TEXT NOT NULL DEFAULT "", '
-        'PRIMARY KEY (user_id, chat_id))'
-    )
-    conn.commit()
-    return conn
+    c = sqlite3.connect(SUBS_DB)
+    c.row_factory = sqlite3.Row
+    return c
 
 
-def get_templates(user_id: int) -> list[dict]:
+def init_templates_db():
     with _conn() as c:
-        rows = c.execute(
-            'SELECT id, name, text FROM templates WHERE user_id=? ORDER BY id',
-            (user_id,)
-        ).fetchall()
-    return [{'id': r[0], 'name': r[1], 'text': r[2]} for r in rows]
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS templates (
+                user_id INTEGER,
+                name    TEXT,
+                text    TEXT NOT NULL,
+                PRIMARY KEY (user_id, name)
+            )
+        ''')
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS blacklist (
+                user_id    INTEGER,
+                chat_id    INTEGER,
+                chat_title TEXT DEFAULT '',
+                PRIMARY KEY (user_id, chat_id)
+            )
+        ''')
 
 
-def add_template(user_id: int, name: str, text: str) -> int:
-    with _conn() as c:
-        cur = c.execute(
-            'INSERT INTO templates (user_id, name, text) VALUES (?, ?, ?)',
-            (user_id, name, text),
-        )
-        return cur.lastrowid
+# ── Templates ──────────────────────────────────────────────────────
 
-
-def delete_template(template_id: int, user_id: int) -> bool:
-    with _conn() as c:
-        cur = c.execute(
-            'DELETE FROM templates WHERE id=? AND user_id=?',
-            (template_id, user_id),
-        )
-        return cur.rowcount > 0
-
-
-def get_blacklist(user_id: int) -> list[dict]:
-    with _conn() as c:
-        rows = c.execute(
-            'SELECT chat_id, title FROM blacklist WHERE user_id=? ORDER BY title',
-            (user_id,)
-        ).fetchall()
-    return [{'chat_id': r[0], 'title': r[1]} for r in rows]
-
-
-def add_to_blacklist(user_id: int, chat_id: int, title: str = '') -> None:
+def save_template(user_id: int, name: str, text: str):
     with _conn() as c:
         c.execute(
-            'INSERT OR REPLACE INTO blacklist (user_id, chat_id, title) VALUES (?, ?, ?)',
-            (user_id, chat_id, title),
+            'INSERT OR REPLACE INTO templates(user_id, name, text) VALUES (?,?,?)',
+            (user_id, name, text),
         )
 
 
-def remove_from_blacklist(user_id: int, chat_id: int) -> bool:
+def get_template(user_id: int, name: str) -> str | None:
+    with _conn() as c:
+        row = c.execute(
+            'SELECT text FROM templates WHERE user_id=? AND name=?',
+            (user_id, name),
+        ).fetchone()
+    return row['text'] if row else None
+
+
+def list_templates(user_id: int) -> list[tuple[int, str, str]]:
+    """Returns [(rowid, name, text), ...]"""
+    with _conn() as c:
+        rows = c.execute(
+            'SELECT rowid, name, text FROM templates WHERE user_id=? ORDER BY name',
+            (user_id,),
+        ).fetchall()
+    return [(r['rowid'], r['name'], r['text']) for r in rows]
+
+
+def get_template_by_rowid(rowid: int, user_id: int) -> tuple[str, str] | None:
+    """Returns (name, text) or None."""
+    with _conn() as c:
+        row = c.execute(
+            'SELECT name, text FROM templates WHERE rowid=? AND user_id=?',
+            (rowid, user_id),
+        ).fetchone()
+    return (row['name'], row['text']) if row else None
+
+
+def update_template(rowid: int, user_id: int, new_name: str, new_text: str) -> bool:
     with _conn() as c:
         cur = c.execute(
+            'UPDATE templates SET name=?, text=? WHERE rowid=? AND user_id=?',
+            (new_name, new_text, rowid, user_id),
+        )
+    return cur.rowcount > 0
+
+
+def delete_template(user_id: int, name: str) -> bool:
+    with _conn() as c:
+        cur = c.execute(
+            'DELETE FROM templates WHERE user_id=? AND name=?',
+            (user_id, name),
+        )
+    return cur.rowcount > 0
+
+
+def delete_template_by_rowid(rowid: int, user_id: int) -> bool:
+    with _conn() as c:
+        cur = c.execute(
+            'DELETE FROM templates WHERE rowid=? AND user_id=?',
+            (rowid, user_id),
+        )
+    return cur.rowcount > 0
+
+
+# ── Blacklist ──────────────────────────────────────────────────────
+
+def add_to_blacklist(user_id: int, chat_id: int, chat_title: str = ''):
+    with _conn() as c:
+        c.execute(
+            'INSERT OR REPLACE INTO blacklist(user_id, chat_id, chat_title) VALUES (?,?,?)',
+            (user_id, chat_id, chat_title),
+        )
+
+
+def remove_from_blacklist(user_id: int, chat_id: int):
+    with _conn() as c:
+        c.execute(
             'DELETE FROM blacklist WHERE user_id=? AND chat_id=?',
             (user_id, chat_id),
         )
-        return cur.rowcount > 0
+
+
+def get_blacklist(user_id: int) -> list[tuple[int, str]]:
+    with _conn() as c:
+        rows = c.execute(
+            'SELECT chat_id, chat_title FROM blacklist WHERE user_id=?',
+            (user_id,),
+        ).fetchall()
+    return [(r['chat_id'], r['chat_title']) for r in rows]
+
+
+def is_blacklisted(user_id: int, chat_id: int) -> bool:
+    with _conn() as c:
+        row = c.execute(
+            'SELECT 1 FROM blacklist WHERE user_id=? AND chat_id=?',
+            (user_id, chat_id),
+        ).fetchone()
+    return bool(row)
 
 
 def blacklisted_ids(user_id: int) -> set[int]:
-    return {e['chat_id'] for e in get_blacklist(user_id)}
+    return {chat_id for chat_id, _ in get_blacklist(user_id)}

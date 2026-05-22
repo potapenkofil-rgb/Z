@@ -1,9 +1,11 @@
 import asyncio
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 
 from state import pending_gflood, userbot_refs
+from templates import remove_from_blacklist
 from tasks import (
     _card_kb,
     _card_text,
@@ -11,6 +13,8 @@ from tasks import (
     _t_all,
     _t_del,
     _t_get,
+    _t_pause_all,
+    _t_resume_all,
     _tasks_page_kb,
     _tasks_page_text,
 )
@@ -29,17 +33,42 @@ async def cb_tasks_page(callback: CallbackQuery):
         return
     page = int(suffix)
     uid  = callback.from_user.id
-    await callback.message.edit_text(
-        _tasks_page_text(uid, page),
-        parse_mode='HTML',
-        reply_markup=_tasks_page_kb(uid, page),
-    )
+    try:
+        await callback.message.edit_text(
+            _tasks_page_text(uid, page),
+            parse_mode='HTML',
+            reply_markup=_tasks_page_kb(uid, page),
+        )
+    except TelegramBadRequest:
+        pass
     await callback.answer()
 
 
 # ─────────────────────────────────────────────────────────────────
 # Task card callbacks (pause / stop)
 # ─────────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data == 'tl_pause_all')
+async def cb_pause_all(callback: CallbackQuery):
+    uid = callback.from_user.id
+    _t_pause_all(uid)
+    await callback.answer('⏸ Все задачи на паузе')
+    try:
+        await callback.message.edit_reply_markup(reply_markup=_tasks_page_kb(uid, 0))
+    except TelegramBadRequest:
+        pass
+
+
+@router.callback_query(F.data == 'tl_resume_all')
+async def cb_resume_all(callback: CallbackQuery):
+    uid = callback.from_user.id
+    _t_resume_all(uid)
+    await callback.answer('▶️ Все задачи возобновлены')
+    try:
+        await callback.message.edit_reply_markup(reply_markup=_tasks_page_kb(uid, 0))
+    except TelegramBadRequest:
+        pass
+
 
 @router.callback_query(F.data.startswith('tp_'))
 async def cb_pause(callback: CallbackQuery):
@@ -125,3 +154,16 @@ async def cb_gflood_folder(callback: CallbackQuery):
                        callback.message.chat.id, ref['main_loop'], folder_title),
         ref['loop'],
     )
+
+
+# ─────────────────────────────────────────────────────────────────
+# Blacklist management
+# ─────────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith('bl_rm_'))
+async def cb_bl_rm(callback: CallbackQuery):
+    chat_id = int(callback.data[6:])
+    uid     = callback.from_user.id
+    remove_from_blacklist(uid, chat_id)
+    await callback.answer('✅ Удалён из чёрного списка')
+    await callback.message.delete()

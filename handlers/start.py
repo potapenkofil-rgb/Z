@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 from aiogram import F, Router
 from aiogram.types import (
@@ -10,6 +11,7 @@ from aiogram.types import (
 
 from sessions import is_admin, load_meta, save_meta
 from state import userbot_refs
+from subscriptions import get_expiry, has_active_sub
 from userbot import connect_and_run
 
 router = Router()
@@ -29,7 +31,7 @@ def _welcome_text() -> str:
         '━━━━━━━━━━━━━━━━━━━\n'
         '🔑 <b>Для работы нужно подключить аккаунт Telegram.</b>\n\n'
         'Понадобятся два ключа — получить на '
-        '<code>my.telegram.org</code> → API development:\n\n'
+        '<a href="https://my.telegram.org">my.telegram.org</a> → API development:\n\n'
         'API ID    →  <code>12345678</code>\n'
         'API HASH  →  <code>a1b2c3d4e5f6789012345678abcdef01</code>'
     )
@@ -56,13 +58,14 @@ def _main_menu_kb(uid: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text='🚫 Черный список', callback_data='bl_list'),
         ],
         [
-            InlineKeyboardButton(text='📖 Команды', callback_data='guide_main'),
+            InlineKeyboardButton(text='💎 Подписка',  callback_data='sub_menu'),
+            InlineKeyboardButton(text='📖 Команды',   callback_data='guide_main'),
         ],
     ]
     if is_admin(uid):
-        rows[-1].append(
-            InlineKeyboardButton(text='🔐 Админ', callback_data='adm_panel')
-        )
+        rows.append([
+            InlineKeyboardButton(text='🔐 Админ', callback_data='adm_panel'),
+        ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -117,7 +120,6 @@ async def cb_menu_account(callback: CallbackQuery):
     info = meta.get(str(uid))
 
     if not info:
-        # Сессии нет — показываем экран приветствия
         await callback.message.edit_text(_welcome_text(), parse_mode='HTML',
                                          reply_markup=_welcome_kb())
         await callback.answer()
@@ -127,12 +129,47 @@ async def cb_menu_account(callback: CallbackQuery):
     online = uid in userbot_refs
     status = '🟢 Онлайн' if online else '🔴 Оффлайн'
 
+    # Пытаемся достать живые данные из Telethon
+    name    = '—'
+    user_id_str = '—'
+    premium = '—'
+    username_str = '—'
+
+    ref = userbot_refs.get(uid)
+    if ref:
+        try:
+            me = await asyncio.wrap_future(
+                asyncio.run_coroutine_threadsafe(ref['client'].get_me(), ref['loop'])
+            )
+            first = getattr(me, 'first_name', '') or ''
+            last  = getattr(me, 'last_name',  '') or ''
+            name  = (first + ' ' + last).strip() or '—'
+            user_id_str  = str(me.id)
+            premium = '✅ Есть' if getattr(me, 'premium', False) else '❌ Нет'
+            uname = getattr(me, 'username', None)
+            username_str = f'@{uname}' if uname else '—'
+        except Exception:
+            pass
+
+    # Статус подписки
+    if has_active_sub(uid):
+        days = max(0, (get_expiry(uid) - int(time.time())) // 86400)
+        sub_line = f'💎 <b>Подписка:</b> активна, {days} дн.'
+    else:
+        sub_line = '💎 <b>Подписка:</b> не активна (с водяным знаком)'
+
     text = (
         f'📱 <b>Мой аккаунт</b>\n\n'
-        f'📞 Номер: <code>{phone}</code>\n'
-        f'🔌 Статус: {status}'
+        f'👤 <b>Имя:</b> {name}\n'
+        f'🔗 <b>Username:</b> {username_str}\n'
+        f'🆔 <b>ID:</b> <code>{user_id_str}</code>\n'
+        f'📞 <b>Номер:</b> <code>{phone}</code>\n'
+        f'⭐ <b>Premium:</b> {premium}\n'
+        f'🔌 <b>Статус:</b> {status}\n'
+        f'{sub_line}'
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text='💎 Подписка',          callback_data='sub_menu')],
         [InlineKeyboardButton(text='❌ Отключить аккаунт', callback_data='menu_disconnect')],
         [InlineKeyboardButton(text='◀️ Меню',              callback_data='menu_main')],
     ])

@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import dataclasses
 import itertools
 import time
@@ -7,8 +8,11 @@ from typing import Any, Optional
 from templates import blacklisted_ids
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from telethon.tl.functions.messages import GetDialogFiltersRequest
 
-from config import bot
+from config import bot, WATERMARK_TEXT
+from subscriptions import has_active_sub
+from templates import is_blacklisted
 
 # ─────────────────────────────────────────────────────────────────
 # FloodTask
@@ -31,6 +35,8 @@ class FloodTask:
     asyncio_task: Any  = dataclasses.field(default=None, repr=False)
     target_chats: Optional[list] = None   # gflood
     gflood_mode:  Optional[str]  = None   # 's' | 'o'
+    tmpl_name:    Optional[str]  = None   # template used at task creation
+    entities:     Optional[list] = None   # Telethon formatting entities for text
 
     @property
     def elapsed(self) -> float:
@@ -65,8 +71,19 @@ def _t_get(uid: int, tid: int) -> Optional[FloodTask]:
 def _t_all(uid: int) -> list[FloodTask]:
     return list(_tasks.get(uid, {}).values())
 
+def _t_pause_all(uid: int):
+    for t in _t_all(uid):
+        t.paused = True
+
+def _t_resume_all(uid: int):
+    for t in _t_all(uid):
+        t.paused = False
+
 def _t_by_chat(uid: int, cid: int) -> list[FloodTask]:
     return [t for t in _t_all(uid) if t.chat_id == cid and not t.stopped]
+
+def _t_by_tmpl(uid: int, tmpl_name: str) -> list[FloodTask]:
+    return [t for t in _t_all(uid) if t.tmpl_name == tmpl_name and not t.stopped]
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -87,11 +104,93 @@ async def _pausable_sleep(task: FloodTask, seconds: float):
             slept += step
 
 
-async def _send_one(client, chat, text: str, media: Any):
-    if media:
-        await client.send_file(chat, media, caption=text or None)
-    else:
-        await client.send_message(chat, text)
+def _utf16_len(s: str) -> int:
+    return len(s.encode('utf-16-le')) // 2
+
+
+def _slice_entities(entities: list, body_start_utf16: int) -> list:
+    """Оставляет только entity-объекты внутри body и сдвигает offset на начало body."""
+    result = []
+    for e in entities:
+        e_end = e.offset + e.length
+        if e_end <= body_start_utf16:
+            continue
+        new_e = copy.copy(e)
+        clipped = max(e.offset, body_start_utf16)
+        new_e.offset = clipped - body_start_utf16
+        new_e.length = e_end - clipped
+        if new_e.length > 0:
+            result.append(new_e)
+    return result
+
+
+def _is_sticker(media: Any) -> bool:
+    try:
+        from telethon.tl.types import DocumentAttributeSticker, MessageMediaDocument
+        if not isinstance(media, MessageMediaDocument):
+            return False
+        doc = getattr(media, 'document', None)
+        if not doc:
+            return False
+        return any(isinstance(a, DocumentAttributeSticker)
+                   for a in getattr(doc, 'attributes', []))
+    except Exception:
+        return False
+
+
+def _with_watermark(text: str, entities: list, user_id: int) -> tuple[str, list | None]:
+    """Добавляет watermark жирным текстом через entity, не через markdown."""
+    if has_active_sub(user_id):
+        return text, entities or None
+    from telethon.tl.types import MessageEntityBold
+    sep    = '\n\n'
+    prefix = (text + sep) if text else ''
+    wm_off = _utf16_len(prefix)
+    wm_ent = MessageEntityBold(offset=wm_off, length=_utf16_len(WATERMARK_TEXT))
+    ents   = list(entities or []) + [wm_ent]
+    return prefix + WATERMARK_TEXT, ents
+
+
+async def _send_one(client, chat, text: str, entities: list, media: Any, user_id: int):
+    from telethon.errors import FloodWaitError
+    chat_id = getattr(chat, 'id', chat)
+    if is_blacklisted(user_id, chat_id):
+        return
+    for attempt in range(2):
+        try:
+            if media:
+                if _is_sticker(media):
+                    # У стикеров нет caption; отправляем стикер, затем watermark отдельно
+                    await client.send_file(chat, media.document)
+                    if not has_active_sub(user_id):
+                        from telethon.tl.types import MessageEntityBold
+                        wlen = _utf16_len(WATERMARK_TEXT)
+                        await client.send_message(
+                            chat, WATERMARK_TEXT,
+                            formatting_entities=[MessageEntityBold(offset=0, length=wlen)],
+                        )
+                else:
+                    final_text, final_ents = _with_watermark(text or '', entities, user_id)
+                    file_obj = (getattr(media, 'document', None)
+                                or getattr(media, 'photo', None)
+                                or media)
+                    await client.send_file(
+                        chat, file_obj,
+                        caption=final_text or None,
+                        formatting_entities=final_ents if final_text else None,
+                    )
+            else:
+                final_text, final_ents = _with_watermark(text or '', entities, user_id)
+                await client.send_message(
+                    chat, final_text,
+                    formatting_entities=final_ents,
+                )
+            return
+        except FloodWaitError as e:
+            if attempt == 0:
+                await asyncio.sleep(e.seconds + 1)
+            else:
+                raise
 
 
 async def run_flood(task: FloodTask, client):
@@ -102,7 +201,8 @@ async def run_flood(task: FloodTask, client):
             if task.stopped:
                 break
             try:
-                await _send_one(client, task.chat_id, task.text, task.media)
+                await _send_one(client, task.chat_id, task.text,
+                               task.entities or [], task.media, task.user_id)
                 task.sent += 1
             except Exception as e:
                 print(f'[flood#{task.id}] {e}')
@@ -121,6 +221,19 @@ async def run_gflood(task: FloodTask, client):
     o — идём по чатам по очереди с delay между каждым, count раундов.
     """
     chats = task.target_chats or []
+    errors = []
+
+    async def _send_with_log(c):
+        try:
+            await _send_one(client, c, task.text,
+                           task.entities or [], task.media, task.user_id)
+            task.sent += 1
+        except Exception as e:
+            name   = getattr(c, 'title', None) or getattr(c, 'first_name', str(c))
+            reason = str(e).split(' (caused by')[0]
+            errors.append(f'{name} — {reason}')
+            print(f'[gflood#{task.id}] {name}: {e}')
+
     try:
         for rnd in range(task.count):
             if task.stopped:
@@ -131,11 +244,7 @@ async def run_gflood(task: FloodTask, client):
                 break
 
             if task.gflood_mode == 's':
-                await asyncio.gather(
-                    *[_send_one(client, c, task.text, task.media) for c in chats],
-                    return_exceptions=True,
-                )
-                task.sent += 1
+                await asyncio.gather(*[_send_with_log(c) for c in chats])
                 if rnd + 1 < task.count:
                     await _pausable_sleep(task, task.delay)
             else:  # 'o'
@@ -144,11 +253,7 @@ async def run_gflood(task: FloodTask, client):
                         break
                     while task.paused and not task.stopped:
                         await asyncio.sleep(0.3)
-                    try:
-                        await _send_one(client, c, task.text, task.media)
-                        task.sent += 1
-                    except Exception as e:
-                        print(f'[gflood#{task.id}] {e}')
+                    await _send_with_log(c)
                     if not task.stopped:
                         await _pausable_sleep(task, task.delay)
     except asyncio.CancelledError:
@@ -156,6 +261,38 @@ async def run_gflood(task: FloodTask, client):
     finally:
         task.stopped = True
         _t_del(task.user_id, task.id)
+        # Отчёт пользователю об ошибках через главный loop бота
+        if errors:
+            from state import userbot_refs
+            ref = userbot_refs.get(task.user_id)
+            if ref:
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        bot.send_message(
+                            task.user_id,
+                            f'Пропущено ({len(errors)}):\n' +
+                            '\n'.join(f'• {e}' for e in errors[:10]) +
+                            (f'\n…и ещё {len(errors)-10}' if len(errors) > 10 else '')
+                        ),
+                        ref['main_loop'],
+                    )
+                except Exception:
+                    pass
+        else:
+            # Успех — тоже уведомим
+            from state import userbot_refs
+            ref = userbot_refs.get(task.user_id)
+            if ref and task.sent > 0:
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        bot.send_message(
+                            task.user_id,
+                            f'✅ gflood #{task.id} завершён — отправлено {task.sent}'
+                        ),
+                        ref['main_loop'],
+                    )
+                except Exception:
+                    pass
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -170,7 +307,7 @@ def _card_text(t: FloodTask) -> str:
     kind   = 'gflood' if t.target_chats else 'flood'
     body   = t.text or '(медиа без текста)'
     return (
-        f'📋 <b>Задача #{t.id}</b> [{kind}] — {status}\n\n'
+        f'📋 <b>Задача <code>#{t.id}</code></b> [{kind}] — {status}\n\n'
         f'📍 <b>Чат:</b> {t.chat_title}\n'
         f'⏱ <b>Задержка:</b> {t.delay} с\n'
         f'📨 <b>Прогресс:</b> {t.sent}/{t.count}\n'
@@ -231,6 +368,11 @@ def _tasks_page_kb(uid: int, page: int) -> InlineKeyboardMarkup:
         if page < total_pages - 1:
             nav.append(InlineKeyboardButton(text='▶️', callback_data=f'tl_{page + 1}'))
         rows.append(nav)
+    if all_tasks:
+        rows.append([
+            InlineKeyboardButton(text='⏸ Пауза всех',      callback_data='tl_pause_all'),
+            InlineKeyboardButton(text='▶️ Возобновить все', callback_data='tl_resume_all'),
+        ])
     rows.append([InlineKeyboardButton(text='🔄 Обновить', callback_data=f'tl_{page}')])
     if all_tasks:
         rows.append([InlineKeyboardButton(text='⏹ Остановить все', callback_data='ts_all')])
@@ -256,10 +398,81 @@ async def _launch_gflood(client, user_id: int, folder_id: int,
                           cfg: dict, chat_id_bot: int, main_loop,
                           folder_title: str = ''):
     import asyncio as _asyncio
+    from telethon.tl.types import Channel, Chat, User
+
+    chats = []
+    skipped = 0
     try:
-        dialogs = await client.get_dialogs(folder=folder_id)
-        bl      = blacklisted_ids(user_id)
-        chats   = [d.id for d in dialogs if d.id not in bl]
+        res    = await client(GetDialogFiltersRequest())
+        folder = next((f for f in res.filters if getattr(f, 'id', None) == folder_id), None)
+        if folder is None:
+            _asyncio.run_coroutine_threadsafe(
+                bot.send_message(chat_id_bot, '❌ Папка не найдена'), main_loop)
+            return
+
+        bl = blacklisted_ids(user_id)
+
+        include_peers = list(getattr(folder, 'pinned_peers', [])) + \
+                        list(getattr(folder, 'include_peers', []))
+        exclude_peers = list(getattr(folder, 'exclude_peers', []))
+
+        exclude_ids = set()
+        for peer in exclude_peers:
+            pid = (getattr(peer, 'channel_id', None)
+                   or getattr(peer, 'chat_id', None)
+                   or getattr(peer, 'user_id', None))
+            if pid:
+                exclude_ids.add(pid)
+        exclude_ids |= bl
+
+        for peer in include_peers:
+            try:
+                entity = await client.get_entity(peer)
+                if getattr(entity, 'id', None) not in bl:
+                    chats.append(entity)
+            except Exception:
+                skipped += 1
+                continue
+
+        include_ids = {getattr(e, 'id', None) for e in chats}
+
+        f_contacts     = getattr(folder, 'contacts',     False)
+        f_non_contacts = getattr(folder, 'non_contacts', False)
+        f_groups       = getattr(folder, 'groups',       False)
+        f_broadcasts   = getattr(folder, 'broadcasts',   False)
+        f_bots         = getattr(folder, 'bots',         False)
+
+        if any([f_contacts, f_non_contacts, f_groups, f_broadcasts, f_bots]):
+            all_dialogs = await client.get_dialogs(limit=None)
+            for d in all_dialogs:
+                try:
+                    e = d.entity
+                    if e is None:
+                        continue
+                    eid = e.id
+                    if eid in exclude_ids or eid in include_ids:
+                        continue
+                    matched = False
+                    if isinstance(e, User):
+                        if getattr(e, 'bot', False) and f_bots:
+                            matched = True
+                        elif getattr(e, 'contact', False) and f_contacts:
+                            matched = True
+                        elif not getattr(e, 'bot', False) and not getattr(e, 'contact', False) and f_non_contacts:
+                            matched = True
+                    elif isinstance(e, Chat) and f_groups:
+                        matched = True
+                    elif isinstance(e, Channel):
+                        is_group = getattr(e, 'megagroup', False) or getattr(e, 'gigagroup', False)
+                        if is_group and f_groups:
+                            matched = True
+                        elif not is_group and f_broadcasts:
+                            matched = True
+                    if matched:
+                        chats.append(e)
+                        include_ids.add(eid)
+                except Exception:
+                    continue
     except Exception as e:
         _asyncio.run_coroutine_threadsafe(
             bot.send_message(chat_id_bot, f'❌ Ошибка папки: {e}'), main_loop)
@@ -267,7 +480,7 @@ async def _launch_gflood(client, user_id: int, folder_id: int,
 
     if not chats:
         _asyncio.run_coroutine_threadsafe(
-            bot.send_message(chat_id_bot, '❌ В папке нет чатов'), main_loop)
+            bot.send_message(chat_id_bot, '❌ В папке нет доступных чатов'), main_loop)
         return
 
     title      = folder_title or 'папка'
@@ -278,6 +491,8 @@ async def _launch_gflood(client, user_id: int, folder_id: int,
         text=cfg['text'], media=cfg['media'],
         delay=cfg['delay'], count=cfg['count'],
         target_chats=chats, gflood_mode=cfg['mode'],
+        tmpl_name=cfg.get('tmpl_name'),
+        entities=cfg.get('entities') or [],
     )
     _t_add(t)
     t.asyncio_task = _asyncio.get_running_loop().create_task(run_gflood(t, client))

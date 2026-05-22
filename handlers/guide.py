@@ -10,11 +10,22 @@ router = Router()
 def _guide_main_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text='📨 Flood',  callback_data='guide_flood'),
-            InlineKeyboardButton(text='📁 gFlood', callback_data='guide_gflood'),
+            InlineKeyboardButton(text='📨 /flood',      callback_data='guide_flood'),
+            InlineKeyboardButton(text='📁 /gflood',     callback_data='guide_gflood'),
         ],
-        [InlineKeyboardButton(text='📋 Задачи',    callback_data='guide_tasks')],
-        [InlineKeyboardButton(text='◀️ Меню',      callback_data='menu_main')],
+        [
+            InlineKeyboardButton(text='📋 Задачи',      callback_data='guide_tasks'),
+            InlineKeyboardButton(text='🏓 /ping',       callback_data='guide_ping'),
+        ],
+        [
+            InlineKeyboardButton(text='🚫 /noflood',    callback_data='guide_noflood'),
+            InlineKeyboardButton(text='📵 /blacklist',  callback_data='guide_blacklist'),
+        ],
+        [
+            InlineKeyboardButton(text='📝 /template',   callback_data='guide_template'),
+            InlineKeyboardButton(text='🗂 /templates',  callback_data='guide_templates'),
+        ],
+        [InlineKeyboardButton(text='◀️ Меню',           callback_data='menu_main')],
     ])
 
 def _back_kb() -> InlineKeyboardMarkup:
@@ -61,12 +72,12 @@ async def cb_guide_gflood(callback: CallbackQuery):
         '📁 <b>/gflood — рассылка по папке</b>\n\n'
         'Отправляет сообщение во все чаты выбранной папки.\n\n'
         '<b>Формат:</b>\n'
-        '<code>/gflood [задержка] [кол-во] [режим] [текст]</code>\n\n'
+        '<code>/gflood [режим] [задержка] [кол-во] [текст]</code>\n\n'
         '<b>Режимы:</b>\n'
         '  <code>s</code> — сразу во все чаты одновременно\n'
         '  <code>o</code> — по очереди, с задержкой между чатами\n\n'
         '<b>Пример:</b>\n'
-        '<code>/gflood 3 5 s Текст объявления</code>\n'
+        '<code>/gflood s 3 5 Текст объявления</code>\n'
         '→ 5 раундов по всем чатам папки, интервал 3 сек\n\n'
         '💡 После команды бот попросит выбрать папку'
     )
@@ -88,6 +99,83 @@ async def cb_guide_tasks(callback: CallbackQuery):
         '<code>/floodstop</code>\n'
         '→ остановить все рассылки в текущем чате\n\n'
         '💡 На карточке задачи есть кнопки паузы и стопа'
+    )
+    await callback.message.edit_text(text, parse_mode='HTML', reply_markup=_back_kb())
+    await callback.answer()
+
+
+@router.callback_query(F.data == 'guide_ping')
+async def cb_guide_ping(callback: CallbackQuery):
+    text = (
+        '🏓 <b>/ping — задержка соединения</b>\n\n'
+        'Измеряет время отклика Telegram API.\n\n'
+        '<b>Использование:</b>\n'
+        '<code>/ping</code>\n\n'
+        '💡 В чате с ботом сообщение остаётся\n'
+        '💡 В других чатах удаляется через 1 секунду'
+    )
+    await callback.message.edit_text(text, parse_mode='HTML', reply_markup=_back_kb())
+    await callback.answer()
+
+
+@router.callback_query(F.data == 'guide_noflood')
+async def cb_guide_noflood(callback: CallbackQuery):
+    text = (
+        '🚫 <b>/noflood — запрет рассылки в чат</b>\n\n'
+        'Добавляет или убирает текущий чат из чёрного списка.\n'
+        'Flood и gflood не будут отправлять в заблокированные чаты.\n\n'
+        '<b>Использование:</b>\n'
+        '<code>/noflood</code> — добавить чат в чёрный список\n'
+        '<code>/noflood off</code> — убрать чат из чёрного списка\n\n'
+        '💡 Команды пишите прямо в нужном чате\n'
+        '💡 Управлять списком можно через <code>/blacklist</code>'
+    )
+    await callback.message.edit_text(text, parse_mode='HTML', reply_markup=_back_kb())
+    await callback.answer()
+
+
+@router.callback_query(F.data == 'guide_blacklist')
+async def cb_guide_blacklist(callback: CallbackQuery):
+    text = (
+        '📵 <b>/blacklist — чёрный список чатов</b>\n\n'
+        'Показывает все чаты, в которые запрещена рассылка.\n\n'
+        '<b>Использование:</b>\n'
+        '<code>/blacklist</code>\n\n'
+        '💡 Чтобы добавить чат — напишите <code>/noflood</code> в нём\n'
+        '💡 Удалить чат из списка можно прямо в боте'
+    )
+    await callback.message.edit_text(text, parse_mode='HTML', reply_markup=_back_kb())
+    await callback.answer()
+
+
+@router.callback_query(F.data == 'guide_template')
+async def cb_guide_template(callback: CallbackQuery):
+    text = (
+        '📝 <b>/template — сохранить шаблон</b>\n\n'
+        'Сохраняет текст под именем для быстрого использования.\n\n'
+        '<b>Формат:</b>\n'
+        '<code>/template [название] [текст]</code>\n\n'
+        '<b>Пример:</b>\n'
+        '<code>/template привет Добрый день, рады вас видеть!</code>\n\n'
+        '<b>Использование в flood:</b>\n'
+        '<code>/flood 3 10 --tmpl привет</code>\n\n'
+        '💡 Управлять шаблонами — <code>/templates</code>'
+    )
+    await callback.message.edit_text(text, parse_mode='HTML', reply_markup=_back_kb())
+    await callback.answer()
+
+
+@router.callback_query(F.data == 'guide_templates')
+async def cb_guide_templates(callback: CallbackQuery):
+    text = (
+        '🗂 <b>/templates — список шаблонов</b>\n\n'
+        'Показывает все сохранённые шаблоны.\n'
+        'Для каждого шаблона можно:\n'
+        '  ✏️ изменить название или текст\n'
+        '  ❌ удалить шаблон\n\n'
+        '<b>Использование:</b>\n'
+        '<code>/templates</code>\n\n'
+        '💡 Создать шаблон — <code>/template [название] [текст]</code>'
     )
     await callback.message.edit_text(text, parse_mode='HTML', reply_markup=_back_kb())
     await callback.answer()
