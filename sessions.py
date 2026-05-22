@@ -1,22 +1,30 @@
 import json
 import os
+import threading
 
 from config import ADMINS_FILE, SESSIONS_META, SUPER_ADMIN_ID
+
+_meta_lock   = threading.Lock()
+_admins_lock = threading.Lock()
 
 # ─────────────────────────────────────────────────────────────────
 # Session meta helpers
 # ─────────────────────────────────────────────────────────────────
 
 def load_meta() -> dict:
-    if os.path.exists(SESSIONS_META):
-        with open(SESSIONS_META) as f:
-            return json.load(f)
-    return {}
+    with _meta_lock:
+        if os.path.exists(SESSIONS_META):
+            with open(SESSIONS_META) as f:
+                return json.load(f)
+        return {}
 
 
 def save_meta(meta: dict):
-    with open(SESSIONS_META, 'w') as f:
-        json.dump(meta, f)
+    with _meta_lock:
+        tmp = SESSIONS_META + '.tmp'
+        with open(tmp, 'w') as f:
+            json.dump(meta, f)
+        os.replace(tmp, SESSIONS_META)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -24,15 +32,19 @@ def save_meta(meta: dict):
 # ─────────────────────────────────────────────────────────────────
 
 def load_admins() -> list[int]:
-    if os.path.exists(ADMINS_FILE):
-        with open(ADMINS_FILE) as f:
-            return json.load(f).get('admins', [])
-    return []
+    with _admins_lock:
+        if os.path.exists(ADMINS_FILE):
+            with open(ADMINS_FILE) as f:
+                return json.load(f).get('admins', [])
+        return []
 
 
 def save_admins(admins: list[int]) -> None:
-    with open(ADMINS_FILE, 'w') as f:
-        json.dump({'admins': admins}, f)
+    with _admins_lock:
+        tmp = ADMINS_FILE + '.tmp'
+        with open(tmp, 'w') as f:
+            json.dump({'admins': admins}, f)
+        os.replace(tmp, ADMINS_FILE)
 
 
 def is_admin(user_id: int) -> bool:

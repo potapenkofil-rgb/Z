@@ -11,9 +11,11 @@ except ImportError:
     _connector_factory = lambda: None
 
 
+_TIMEOUT = aiohttp.ClientTimeout(total=15)
+
 async def _post(method: str, payload: dict | None = None) -> dict:
     headers = {'Crypto-Pay-API-Token': CRYPTOBOT_TOKEN}
-    async with aiohttp.ClientSession(connector=_connector_factory()) as s:
+    async with aiohttp.ClientSession(connector=_connector_factory(), timeout=_TIMEOUT) as s:
         async with s.post(f'{API_URL}/{method}', json=payload or {}, headers=headers) as r:
             data = await r.json()
     if not data.get('ok'):

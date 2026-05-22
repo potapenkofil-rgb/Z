@@ -119,8 +119,13 @@ async def step_code(message: Message, state: FSMContext):
         return
     data    = await state.get_data()
     user_id = message.from_user.id
-    cl: TelegramClient = active[user_id]['client']
-    chat_id = active[user_id]['chat_id']
+    entry   = active.get(user_id)
+    if not entry:
+        await state.clear()
+        await message.answer('❌ Сессия истекла. Начните заново — /start')
+        return
+    cl: TelegramClient = entry['client']
+    chat_id = entry['chat_id']
     try:
         await cl.sign_in(data['phone'], code, phone_code_hash=data['phone_code_hash'])
     except PhoneCodeExpiredError:
@@ -143,8 +148,13 @@ async def step_code(message: Message, state: FSMContext):
 async def step_password(message: Message, state: FSMContext):
     data    = await state.get_data()
     user_id = message.from_user.id
-    cl: TelegramClient = active[user_id]['client']
-    chat_id = active[user_id]['chat_id']
+    entry   = active.get(user_id)
+    if not entry:
+        await state.clear()
+        await message.answer('❌ Сессия истекла. Начните заново — /start')
+        return
+    cl: TelegramClient = entry['client']
+    chat_id = entry['chat_id']
     try:
         await cl.sign_in(password=message.text)
     except Exception:
