@@ -80,7 +80,7 @@ def _list_kb(user_id: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text='◀️ Меню', callback_data='menu_main')],
         ])
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=name, callback_data=f'tmpl_view_{rowid}')]
+        [InlineKeyboardButton(text=name or '(без названия)', callback_data=f'tmpl_view_{rowid}')]
         for rowid, name, _ in tmpls
     ] + [[InlineKeyboardButton(text='◀️ Меню', callback_data='menu_main')]])
 
@@ -202,6 +202,9 @@ async def step_edit_name(message: Message, state: FSMContext):
     old_name = data['old_name']
     uid      = message.from_user.id
     new_name = message.text.strip()
+    if not new_name:
+        await message.answer('❌ Название не может быть пустым. Введите название:')
+        return
 
     row = get_template_by_rowid(rowid, uid)
     if not row:

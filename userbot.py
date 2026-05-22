@@ -259,11 +259,11 @@ async def _cmd_task(event, client, user_id: int, chat_id_bot: int, main_loop):
 async def _cmd_template(event, user_id: int, chat_id_bot: int, main_loop):
     parts = (event.message.message or '').split(' ', 2)
     await event.message.delete()
-    if len(parts) < 3:
+    if len(parts) < 3 or not parts[1].strip():
         asyncio.run_coroutine_threadsafe(
             bot.send_message(chat_id_bot, '❌ Формат: /template название текст'), main_loop)
         return
-    name, text = parts[1], parts[2]
+    name, text = parts[1].strip(), parts[2]
     save_template(user_id, name, text)
     asyncio.run_coroutine_threadsafe(
         bot.send_message(chat_id_bot, f'✅ Шаблон <b>{name}</b> сохранён', parse_mode='HTML'),
@@ -279,7 +279,7 @@ async def _cmd_templates(event, user_id: int, chat_id_bot: int, main_loop):
         return
     from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=name, callback_data=f'tmpl_view_{rowid}')]
+        [InlineKeyboardButton(text=name or '(без названия)', callback_data=f'tmpl_view_{rowid}')]
         for rowid, name, _ in tmpls
     ] + [[InlineKeyboardButton(text='◀️ Меню', callback_data='menu_main')]])
     asyncio.run_coroutine_threadsafe(
