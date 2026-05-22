@@ -9,6 +9,7 @@ from telethon.tl.functions.messages import GetDialogFiltersRequest
 
 from config import bot, WATERMARK_TEXT
 from subscriptions import has_active_sub
+from templates import is_blacklisted
 
 # ─────────────────────────────────────────────────────────────────
 # FloodTask
@@ -65,6 +66,14 @@ def _t_get(uid: int, tid: int) -> Optional[FloodTask]:
 def _t_all(uid: int) -> list[FloodTask]:
     return list(_tasks.get(uid, {}).values())
 
+def _t_pause_all(uid: int):
+    for t in _t_all(uid):
+        t.paused = True
+
+def _t_resume_all(uid: int):
+    for t in _t_all(uid):
+        t.paused = False
+
 def _t_by_chat(uid: int, cid: int) -> list[FloodTask]:
     return [t for t in _t_all(uid) if t.chat_id == cid and not t.stopped]
 
@@ -96,11 +105,23 @@ def _apply_watermark(text: str, user_id: int) -> str:
 
 
 async def _send_one(client, chat, text: str, media: Any, user_id: int):
+    from telethon.errors import FloodWaitError
+    chat_id = getattr(chat, 'id', chat)
+    if is_blacklisted(user_id, chat_id):
+        return
     final = _apply_watermark(text or '', user_id)
-    if media:
-        await client.send_file(chat, media, caption=final or None)
-    else:
-        await client.send_message(chat, final)
+    for attempt in range(2):
+        try:
+            if media:
+                await client.send_file(chat, media, caption=final or None)
+            else:
+                await client.send_message(chat, final)
+            return
+        except FloodWaitError as e:
+            if attempt == 0:
+                await asyncio.sleep(e.seconds + 1)
+            else:
+                raise
 
 
 async def run_flood(task: FloodTask, client):
@@ -276,6 +297,11 @@ def _tasks_page_kb(uid: int, page: int) -> InlineKeyboardMarkup:
         if page < total_pages - 1:
             nav.append(InlineKeyboardButton(text='▶️', callback_data=f'tl_{page + 1}'))
         rows.append(nav)
+    if all_tasks:
+        rows.append([
+            InlineKeyboardButton(text='⏸ Пауза всех',      callback_data='tl_pause_all'),
+            InlineKeyboardButton(text='▶️ Возобновить все', callback_data='tl_resume_all'),
+        ])
     rows.append([InlineKeyboardButton(text='🔄 Обновить', callback_data=f'tl_{page}')])
     rows.append([InlineKeyboardButton(text='◀️ Меню',     callback_data='menu_main')])
     return InlineKeyboardMarkup(inline_keyboard=rows)

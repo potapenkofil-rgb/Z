@@ -1,13 +1,21 @@
 import time
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
-from config import SUB_PRICE_USDT
+from config import SUB_TIERS
 from cryptopay import create_invoice
 from subscriptions import add_pending_invoice, get_expiry, has_active_sub
 
 router = Router()
+
+_TIER_LABELS = {
+    '1m':  '1 месяц — $2',
+    '3m':  '3 месяца — $6',
+    '6m':  '6 месяцев — $12',
+    '12m': '1 год — $24',
+}
 
 
 def _sub_status_text(user_id: int) -> str:
@@ -21,42 +29,64 @@ def _sub_status_text(user_id: int) -> str:
         )
     return (
         '💎 <b>Подписка</b>\n\n'
-        f'❌ Не активна — к каждому сообщению флуда добавляется реклама бота\n\n'
-        f'💰 Стоимость: <b>{SUB_PRICE_USDT} USDT / месяц</b>\n'
-        f'💳 Оплата через @CryptoBot'
+        '❌ Не активна — к каждому сообщению флуда добавляется реклама бота\n\n'
+        '💳 Оплата через @CryptoBot'
     )
 
 
 def _sub_kb(user_id: int) -> InlineKeyboardMarkup:
-    rows = []
-    if not has_active_sub(user_id):
-        rows.append([InlineKeyboardButton(text='💳 Купить подписку', callback_data='sub_buy')])
-    else:
-        rows.append([InlineKeyboardButton(text='💳 Продлить', callback_data='sub_buy')])
-    rows.append([InlineKeyboardButton(text='◀️ Меню', callback_data='menu_main')])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    label = '💳 Продлить' if has_active_sub(user_id) else '💳 Купить подписку'
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=label,    callback_data='sub_buy')],
+        [InlineKeyboardButton(text='◀️ Меню', callback_data='menu_main')],
+    ])
 
 
 @router.callback_query(F.data == 'sub_menu')
 async def cb_sub_menu(callback: CallbackQuery):
     uid = callback.from_user.id
-    await callback.message.edit_text(
-        _sub_status_text(uid), parse_mode='HTML',
-        reply_markup=_sub_kb(uid),
-    )
+    try:
+        await callback.message.edit_text(
+            _sub_status_text(uid), parse_mode='HTML',
+            reply_markup=_sub_kb(uid),
+        )
+    except TelegramBadRequest:
+        pass
     await callback.answer()
 
 
 @router.callback_query(F.data == 'sub_buy')
 async def cb_sub_buy(callback: CallbackQuery):
-    uid = callback.from_user.id
+    rows = [
+        [InlineKeyboardButton(text=label, callback_data=f'sub_pay_{key}')]
+        for key, label in _TIER_LABELS.items()
+    ]
+    rows.append([InlineKeyboardButton(text='◀️ Назад', callback_data='sub_menu')])
+    await callback.message.edit_text(
+        '💎 <b>Выберите период подписки:</b>',
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith('sub_pay_'))
+async def cb_sub_pay(callback: CallbackQuery):
+    tier_key = callback.data[8:]
+    tier     = SUB_TIERS.get(tier_key)
+    if not tier:
+        await callback.answer('Неверный тариф')
+        return
+
+    price, days = tier
+    uid         = callback.from_user.id
     await callback.answer('Создаю счёт…')
 
     try:
         invoice = await create_invoice(
-            amount=SUB_PRICE_USDT,
+            amount=price,
             asset='USDT',
-            description=f'Подписка на месяц для пользователя {uid}',
+            description=f'Подписка {_TIER_LABELS[tier_key]} (user {uid})',
         )
     except Exception as e:
         await callback.message.edit_text(
@@ -69,16 +99,16 @@ async def cb_sub_buy(callback: CallbackQuery):
 
     invoice_id = invoice['invoice_id']
     pay_url    = invoice.get('pay_url') or invoice.get('bot_invoice_url')
-    add_pending_invoice(invoice_id, uid)
+    add_pending_invoice(invoice_id, uid, days)
 
-    text = (
-        '💳 <b>Счёт создан</b>\n\n'
-        f'💰 Сумма: <b>{SUB_PRICE_USDT} USDT</b>\n'
-        f'⏱ Подписка активируется автоматически после оплаты (до 30 секунд).\n\n'
-        f'Нажми кнопку ниже чтобы оплатить через CryptoBot.'
+    await callback.message.edit_text(
+        f'💳 <b>Счёт создан</b>\n\n'
+        f'📦 Тариф: <b>{_TIER_LABELS[tier_key]}</b>\n'
+        f'💰 Сумма: <b>{price} USDT</b>\n\n'
+        f'Подписка активируется автоматически после оплаты (до 30 сек).',
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text='💸 Оплатить', url=pay_url)],
+            [InlineKeyboardButton(text='◀️ Меню',     callback_data='menu_main')],
+        ]),
     )
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text='💸 Оплатить', url=pay_url)],
-        [InlineKeyboardButton(text='◀️ Меню',     callback_data='menu_main')],
-    ])
-    await callback.message.edit_text(text, parse_mode='HTML', reply_markup=kb)

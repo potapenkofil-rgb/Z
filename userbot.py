@@ -10,6 +10,10 @@ from telethon.tl.functions.messages import GetDialogFiltersRequest
 from config import BOT_USER_ID, PROXY, bot
 from sessions import load_meta, save_meta
 from state import _globally_processed, _launching, active, pending_gflood, userbot_refs
+from templates import (
+    add_to_blacklist, delete_template, get_blacklist,
+    get_template, list_templates, remove_from_blacklist, save_template,
+)
 from tasks import (
     FloodTask,
     _id_gen,
@@ -42,6 +46,19 @@ async def _on_outgoing(event, client, user_id: int, chat_id_bot: int, main_loop)
         asyncio.run_coroutine_threadsafe(_send_tasks_list(chat_id_bot, user_id), main_loop)
     elif cmd == '/stop':      await _cmd_stop(event, client, user_id, chat_id_bot, main_loop)
     elif cmd == '/task':      await _cmd_task(event, client, user_id, chat_id_bot, main_loop)
+    elif cmd == '/template':  await _cmd_template(event, user_id, chat_id_bot, main_loop)
+    elif cmd == '/templates': await _cmd_templates(event, user_id, chat_id_bot, main_loop)
+    elif cmd == '/noflood':   await _cmd_noflood(event, client, user_id)
+    elif cmd == '/blacklist': await _cmd_blacklist(event, user_id, chat_id_bot, main_loop)
+
+
+def _apply_tmpl(body: str, user_id: int) -> str | None:
+    """Если body начинается с --tmpl NAME, подставляет текст шаблона."""
+    if body.startswith('--tmpl '):
+        name = body[7:].strip()
+        tmpl = get_template(user_id, name)
+        return tmpl  # None если не найден
+    return body
 
 
 async def _cmd_flood(event, client, user_id: int):
@@ -52,6 +69,12 @@ async def _cmd_flood(event, client, user_id: int):
         count = int(parts[2])
         body  = parts[3] if len(parts) > 3 else ''
     except (IndexError, ValueError):
+        return
+    body = _apply_tmpl(body, user_id)
+    if body is None:
+        await event.message.edit('❌ Шаблон не найден')
+        await asyncio.sleep(1)
+        await event.message.delete()
         return
 
     chat  = await event.get_chat()
@@ -108,6 +131,12 @@ async def _cmd_gflood(event, client, user_id: int, chat_id_bot: int, main_loop):
         count = int(parts[3])
         body  = parts[4] if len(parts) > 4 else ''
     except (IndexError, ValueError):
+        return
+    body = _apply_tmpl(body, user_id)
+    if body is None:
+        await event.message.edit('❌ Шаблон не найден')
+        await asyncio.sleep(1)
+        await event.message.delete()
         return
 
     media = event.message.media   # сохраняем до удаления
@@ -206,6 +235,82 @@ async def _cmd_task(event, client, user_id: int, chat_id_bot: int, main_loop):
                 bot.send_message(chat_id_bot, f'❌ Задача #{tid} не найдена'), main_loop)
         else:
             asyncio.run_coroutine_threadsafe(_send_card(chat_id_bot, t), main_loop)
+
+
+async def _cmd_template(event, user_id: int, chat_id_bot: int, main_loop):
+    parts = (event.message.message or '').split(' ', 2)
+    await event.message.delete()
+    if len(parts) < 3:
+        asyncio.run_coroutine_threadsafe(
+            bot.send_message(chat_id_bot, '❌ Формат: /template название текст'), main_loop)
+        return
+    name, text = parts[1], parts[2]
+    save_template(user_id, name, text)
+    asyncio.run_coroutine_threadsafe(
+        bot.send_message(chat_id_bot, f'✅ Шаблон <b>{name}</b> сохранён', parse_mode='HTML'),
+        main_loop)
+
+
+async def _cmd_templates(event, user_id: int, chat_id_bot: int, main_loop):
+    await event.message.delete()
+    tmpls = list_templates(user_id)
+    if not tmpls:
+        asyncio.run_coroutine_threadsafe(
+            bot.send_message(chat_id_bot, '📋 Шаблонов нет'), main_loop)
+        return
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+    lines = []
+    for name, text in tmpls:
+        preview = text[:40] + '…' if len(text) > 40 else text
+        lines.append(f'<code>{name}</code>: {preview}')
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f'❌ {name}', callback_data=f'tmpl_del_{name}')]
+        for name, _ in tmpls
+    ] + [[InlineKeyboardButton(text='◀️ Меню', callback_data='menu_main')]])
+    asyncio.run_coroutine_threadsafe(
+        bot.send_message(
+            chat_id_bot,
+            '📋 <b>Шаблоны:</b>\n\n' + '\n'.join(lines),
+            parse_mode='HTML', reply_markup=kb,
+        ),
+        main_loop)
+
+
+async def _cmd_noflood(event, client, user_id: int):
+    parts = (event.message.message or '').split()
+    chat  = await event.get_chat()
+    title = getattr(chat, 'title', None) or getattr(chat, 'first_name', str(event.chat_id))
+
+    if len(parts) > 1 and parts[1].lower() in ('off', 'remove', '-'):
+        remove_from_blacklist(user_id, event.chat_id)
+        await event.message.edit(f'✅ {title} удалён из чёрного списка')
+    else:
+        add_to_blacklist(user_id, event.chat_id, title)
+        await event.message.edit(f'🚫 {title} добавлен в чёрный список')
+    await asyncio.sleep(2)
+    await event.message.delete()
+
+
+async def _cmd_blacklist(event, user_id: int, chat_id_bot: int, main_loop):
+    await event.message.delete()
+    bl = get_blacklist(user_id)
+    if not bl:
+        asyncio.run_coroutine_threadsafe(
+            bot.send_message(chat_id_bot, '📋 Чёрный список пуст'), main_loop)
+        return
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+    lines = [f'🚫 <code>{cid}</code> — {title or "без названия"}' for cid, title in bl]
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f'✅ {title or cid}', callback_data=f'bl_rm_{cid}')]
+        for cid, title in bl
+    ] + [[InlineKeyboardButton(text='◀️ Меню', callback_data='menu_main')]])
+    asyncio.run_coroutine_threadsafe(
+        bot.send_message(
+            chat_id_bot,
+            '🚫 <b>Чёрный список:</b>\n\n' + '\n'.join(lines),
+            parse_mode='HTML', reply_markup=kb,
+        ),
+        main_loop)
 
 
 # ─────────────────────────────────────────────────────────────────

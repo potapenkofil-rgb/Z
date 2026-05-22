@@ -24,6 +24,14 @@ SUB_PRICE_USDT  = 2.0
 SUB_DURATION_S  = 30 * 24 * 3600     # 30 дней
 WATERMARK_TEXT  = 'Лучший бот для рассыла: @rassyl_W_robot'
 
+# Тарифы: ключ → (цена USDT, дней)
+SUB_TIERS: dict[str, tuple[float, int]] = {
+    '1m':  (2.0,  30),
+    '3m':  (6.0,  90),
+    '6m':  (12.0, 180),
+    '12m': (24.0, 365),
+}
+
 aio_session = AiohttpSession(proxy='socks5://127.0.0.1:10808')
 bot = Bot(BOT_TOKEN, session=aio_session)
 dp  = Dispatcher(storage=MemoryStorage())

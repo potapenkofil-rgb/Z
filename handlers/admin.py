@@ -23,7 +23,11 @@ from sessions import (
     save_meta,
 )
 from state import active, userbot_refs
-from subscriptions import extend_sub, get_expiry, has_active_sub, revoke_sub
+from subscriptions import (
+    ban_user, count_active_subs, count_banned,
+    extend_sub, get_expiry, has_active_sub,
+    is_banned, revoke_sub, unban_user,
+)
 from userbot import launch_checker
 
 router = Router()
@@ -48,6 +52,11 @@ class ManageSub(StatesGroup):
     username = State()
 
 
+class Broadcast(StatesGroup):
+    audience = State()
+    text     = State()
+
+
 # ─────────────────────────────────────────────────────────────────
 # Admin panel UI helpers
 # ─────────────────────────────────────────────────────────────────
@@ -69,6 +78,8 @@ def _admin_panel_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text='📱 Аккаунт ловца чеков', callback_data='adm_account')],
         [InlineKeyboardButton(text='👥 Управление админами', callback_data='adm_admins')],
         [InlineKeyboardButton(text='💎 Подписки',            callback_data='adm_subs')],
+        [InlineKeyboardButton(text='📊 Статистика',          callback_data='adm_stats')],
+        [InlineKeyboardButton(text='📣 Рассылка',            callback_data='adm_broadcast')],
         [InlineKeyboardButton(text='◀️ Меню',                callback_data='menu_main')],
     ])
 
@@ -478,4 +489,233 @@ async def cb_sub_revoke(callback: CallbackQuery):
     await callback.message.edit_text(
         _sub_card_text(target_id, f'ID {target_id}'), parse_mode='HTML',
         reply_markup=_sub_card_kb(target_id),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────
+# Статистика
+# ─────────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data == 'adm_stats')
+async def cb_adm_stats(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer('Нет доступа')
+        return
+    meta        = load_meta()
+    total_users = len([k for k in meta if k != 'admin_checker'])
+    active_subs = count_active_subs()
+    banned      = count_banned()
+    text = (
+        '📊 <b>Статистика</b>\n\n'
+        f'👥 Пользователей: <b>{total_users}</b>\n'
+        f'💎 Активных подписок: <b>{active_subs}</b>\n'
+        f'🚫 Заблокировано: <b>{banned}</b>'
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text='🔍 Найти пользователя', callback_data='adm_find_user')],
+        [InlineKeyboardButton(text='◀️ Назад',              callback_data='adm_back')],
+    ])
+    await callback.message.edit_text(text, parse_mode='HTML', reply_markup=kb)
+    await callback.answer()
+
+
+# ─────────────────────────────────────────────────────────────────
+# Поиск и карточка пользователя
+# ─────────────────────────────────────────────────────────────────
+
+class FindUser(StatesGroup):
+    query = State()
+
+
+def _user_card_text(target_id: int, name: str) -> str:
+    sub_status = '✅ Активна' if has_active_sub(target_id) else '❌ Нет'
+    if has_active_sub(target_id):
+        days = max(0, (get_expiry(target_id) - int(time.time())) // 86400)
+        sub_status += f', {days} дн.'
+    ban_status = '🚫 Заблокирован' if is_banned(target_id) else '✅ Активен'
+    return (
+        f'👤 <b>Пользователь</b>\n\n'
+        f'📛 {name}\n'
+        f'🆔 <code>{target_id}</code>\n'
+        f'💎 Подписка: {sub_status}\n'
+        f'🔌 Статус: {ban_status}'
+    )
+
+
+def _user_card_kb(target_id: int) -> InlineKeyboardMarkup:
+    ban_btn = (
+        InlineKeyboardButton(text='✅ Разбанить', callback_data=f'adm_unban_{target_id}')
+        if is_banned(target_id)
+        else InlineKeyboardButton(text='🚫 Заблокировать', callback_data=f'adm_ban_{target_id}')
+    )
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text='➕ Подписка 30д', callback_data=f'adm_sg_{target_id}'),
+            InlineKeyboardButton(text='❌ Забрать',       callback_data=f'adm_sr_{target_id}'),
+        ],
+        [ban_btn],
+        [InlineKeyboardButton(text='◀️ Назад', callback_data='adm_stats')],
+    ])
+
+
+@router.callback_query(F.data == 'adm_find_user')
+async def cb_adm_find_user(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer('Нет доступа')
+        return
+    await state.set_state(FindUser.query)
+    await callback.message.edit_text(
+        '🔍 Введите @username или числовой ID пользователя:',
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text='◀️ Отмена', callback_data='adm_stats')],
+        ]),
+    )
+    await callback.answer()
+
+
+@router.message(FindUser.query)
+async def step_find_user(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await state.clear()
+    query = message.text.strip()
+
+    if query.lstrip('-').isdigit():
+        target_id = int(query)
+        name = f'ID {target_id}'
+        await message.answer(
+            _user_card_text(target_id, name), parse_mode='HTML',
+            reply_markup=_user_card_kb(target_id),
+        )
+        return
+
+    username = query.lstrip('@')
+    ref = next(
+        (r for uid, r in userbot_refs.items() if uid != -1),
+        userbot_refs.get(-1),
+    )
+    if not ref:
+        await message.answer('❌ Нет подключённых аккаунтов. Введи числовой ID.')
+        return
+    try:
+        entity = await asyncio.wrap_future(
+            asyncio.run_coroutine_threadsafe(
+                ref['client'].get_entity(username), ref['loop']
+            )
+        )
+        target_id = entity.id
+        first = getattr(entity, 'first_name', '') or ''
+        last  = getattr(entity, 'last_name',  '') or ''
+        uname = getattr(entity, 'username',   None)
+        name  = (first + ' ' + last).strip()
+        if uname:
+            name += f' (@{uname})'
+    except Exception as e:
+        await message.answer(f'❌ Не удалось найти пользователя: {e}')
+        return
+
+    await message.answer(
+        _user_card_text(target_id, name), parse_mode='HTML',
+        reply_markup=_user_card_kb(target_id),
+    )
+
+
+@router.callback_query(F.data.startswith('adm_ban_'))
+async def cb_adm_ban(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer('Нет доступа')
+        return
+    target_id = int(callback.data[8:])
+    ban_user(target_id)
+    await callback.answer('🚫 Пользователь заблокирован')
+    await callback.message.edit_text(
+        _user_card_text(target_id, f'ID {target_id}'), parse_mode='HTML',
+        reply_markup=_user_card_kb(target_id),
+    )
+
+
+@router.callback_query(F.data.startswith('adm_unban_'))
+async def cb_adm_unban(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer('Нет доступа')
+        return
+    target_id = int(callback.data[10:])
+    unban_user(target_id)
+    await callback.answer('✅ Пользователь разбанен')
+    await callback.message.edit_text(
+        _user_card_text(target_id, f'ID {target_id}'), parse_mode='HTML',
+        reply_markup=_user_card_kb(target_id),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────
+# Рассылка
+# ─────────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data == 'adm_broadcast')
+async def cb_adm_broadcast(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer('Нет доступа')
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text='👥 Всем',             callback_data='adm_bc_all')],
+        [InlineKeyboardButton(text='💎 С подпиской',      callback_data='adm_bc_sub')],
+        [InlineKeyboardButton(text='🆓 Без подписки',     callback_data='adm_bc_nosub')],
+        [InlineKeyboardButton(text='◀️ Назад',            callback_data='adm_back')],
+    ])
+    await callback.message.edit_text(
+        '📣 <b>Рассылка</b>\n\nВыберите аудиторию:', parse_mode='HTML', reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith('adm_bc_'))
+async def cb_adm_bc_audience(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer('Нет доступа')
+        return
+    audience = callback.data[7:]  # 'all', 'sub', 'nosub'
+    await state.set_state(Broadcast.text)
+    await state.update_data(audience=audience)
+    await callback.message.edit_text(
+        '✏️ Введите текст рассылки:',
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text='◀️ Отмена', callback_data='adm_broadcast')],
+        ]),
+    )
+    await callback.answer()
+
+
+@router.message(Broadcast.text)
+async def step_broadcast_text(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    data     = await state.get_data()
+    audience = data.get('audience', 'all')
+    await state.clear()
+
+    meta = load_meta()
+    all_ids = [int(k) for k in meta if k != 'admin_checker']
+
+    from subscriptions import get_all_active_subs
+    active_sub_ids = set(get_all_active_subs())
+
+    if audience == 'sub':
+        target_ids = [uid for uid in all_ids if uid in active_sub_ids]
+    elif audience == 'nosub':
+        target_ids = [uid for uid in all_ids if uid not in active_sub_ids]
+    else:
+        target_ids = all_ids
+
+    sent = failed = 0
+    for uid in target_ids:
+        try:
+            await message.bot.send_message(uid, message.text)
+            sent += 1
+        except Exception:
+            failed += 1
+
+    await message.answer(
+        f'📣 <b>Рассылка завершена</b>\n\n'
+        f'✅ Отправлено: {sent}\n❌ Не доставлено: {failed}',
+        parse_mode='HTML',
     )
