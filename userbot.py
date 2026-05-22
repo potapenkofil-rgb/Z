@@ -35,25 +35,28 @@ from tasks import (
 # ─────────────────────────────────────────────────────────────────
 
 async def _on_outgoing(event, client, user_id: int, chat_id_bot: int, main_loop):
-    text = event.message.message or ''
-    if not text:
-        return
-    cmd = text.split()[0].lower()
+    try:
+        text = event.message.message or ''
+        if not text:
+            return
+        cmd = text.split()[0].lower()
 
-    if   cmd == '/flood':     await _cmd_flood(event, client, user_id)
-    elif cmd == '/floodstop': await _cmd_floodstop(event, client, user_id)
-    elif cmd == '/gflood':    await _cmd_gflood(event, client, user_id, chat_id_bot, main_loop)
-    elif cmd == '/tasks':
-        await event.message.delete()
-        asyncio.run_coroutine_threadsafe(_send_tasks_list(chat_id_bot, user_id), main_loop)
-    elif cmd == '/stop':      await _cmd_stop(event, client, user_id, chat_id_bot, main_loop)
-    elif cmd == '/task' or re.match(r'^/task[#\d]', cmd):
-        await _cmd_task(event, client, user_id, chat_id_bot, main_loop)
-    elif cmd == '/template':  await _cmd_template(event, user_id, chat_id_bot, main_loop)
-    elif cmd == '/templates': await _cmd_templates(event, user_id, chat_id_bot, main_loop)
-    elif cmd == '/noflood':   await _cmd_noflood(event, client, user_id)
-    elif cmd == '/blacklist': await _cmd_blacklist(event, user_id, chat_id_bot, main_loop)
-    elif cmd == '/ping':      await _cmd_ping(event, client, user_id)
+        if   cmd == '/flood':     await _cmd_flood(event, client, user_id)
+        elif cmd == '/floodstop': await _cmd_floodstop(event, client, user_id)
+        elif cmd == '/gflood':    await _cmd_gflood(event, client, user_id, chat_id_bot, main_loop)
+        elif cmd == '/tasks':
+            await event.message.delete()
+            asyncio.run_coroutine_threadsafe(_send_tasks_list(chat_id_bot, user_id), main_loop)
+        elif cmd == '/stop':      await _cmd_stop(event, client, user_id, chat_id_bot, main_loop)
+        elif cmd == '/task' or re.match(r'^/task[#\d]', cmd):
+            await _cmd_task(event, client, user_id, chat_id_bot, main_loop)
+        elif cmd == '/template':  await _cmd_template(event, user_id, chat_id_bot, main_loop)
+        elif cmd == '/templates': await _cmd_templates(event, user_id, chat_id_bot, main_loop)
+        elif cmd == '/noflood':   await _cmd_noflood(event, client, user_id)
+        elif cmd == '/blacklist': await _cmd_blacklist(event, user_id, chat_id_bot, main_loop)
+        elif cmd == '/ping':      await _cmd_ping(event, client, user_id)
+    except Exception as e:
+        print(f'[{user_id}] ошибка команды: {e}')
 
 
 def _apply_tmpl(body: str, user_id: int) -> tuple[str | None, str | None]:
@@ -447,11 +450,17 @@ def run_client_in_thread(user_id: int, api_id: int, api_hash: str,
         # Все аккаунты детектируют чеки во входящих
         @client.on(events.NewMessage(incoming=True))
         async def on_new(event):
-            await try_claim(event.message)
+            try:
+                await try_claim(event.message)
+            except Exception as e:
+                print(f'[{user_id}] on_new error: {e}')
 
         @client.on(events.MessageEdited(incoming=True))
         async def on_edit(event):
-            await try_claim(event.message)
+            try:
+                await try_claim(event.message)
+            except Exception as e:
+                print(f'[{user_id}] on_edit error: {e}')
 
         # Flood-команды — только для обычных аккаунтов, не для ловца
         if not is_checker:

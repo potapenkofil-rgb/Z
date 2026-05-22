@@ -6,8 +6,9 @@ from config import SUBS_DB, SUB_DURATION_S
 
 
 def _conn() -> sqlite3.Connection:
-    c = sqlite3.connect(SUBS_DB)
+    c = sqlite3.connect(SUBS_DB, timeout=10)
     c.row_factory = sqlite3.Row
+    c.execute('PRAGMA journal_mode=WAL')
     return c
 
 
