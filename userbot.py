@@ -333,9 +333,9 @@ async def _cmd_ping(event, user_id: int):
     from config import BOT_USER_ID
     is_bot_chat = event.chat_id == BOT_USER_ID
     t0 = time.monotonic()
-    await event.message.edit('🏓 Pong!')
+    await client.get_me()
     ms = (time.monotonic() - t0) * 1000
-    await event.message.edit(f'🏓 {ms:.0f} мс')
+    await event.message.edit(f'🏓 Pong: {ms:.0f} мс')
     if not is_bot_chat:
         await asyncio.sleep(1)
         await event.message.delete()
