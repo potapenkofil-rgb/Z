@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import dataclasses
 import itertools
 import time
@@ -33,6 +34,7 @@ class FloodTask:
     target_chats: Optional[list] = None   # gflood
     gflood_mode:  Optional[str]  = None   # 's' | 'o'
     tmpl_name:    Optional[str]  = None   # template used at task creation
+    entities:     Optional[list] = None   # Telethon formatting entities for text
 
     @property
     def elapsed(self) -> float:
@@ -100,26 +102,87 @@ async def _pausable_sleep(task: FloodTask, seconds: float):
             slept += step
 
 
-def _apply_watermark(text: str, user_id: int) -> str:
-    """Добавляет рекламу к тексту, если у юзера нет активной подписки."""
+def _utf16_len(s: str) -> int:
+    return len(s.encode('utf-16-le')) // 2
+
+
+def _slice_entities(entities: list, body_start_utf16: int) -> list:
+    """Оставляет только entity-объекты внутри body и сдвигает offset на начало body."""
+    result = []
+    for e in entities:
+        e_end = e.offset + e.length
+        if e_end <= body_start_utf16:
+            continue
+        new_e = copy.copy(e)
+        clipped = max(e.offset, body_start_utf16)
+        new_e.offset = clipped - body_start_utf16
+        new_e.length = e_end - clipped
+        if new_e.length > 0:
+            result.append(new_e)
+    return result
+
+
+def _is_sticker(media: Any) -> bool:
+    try:
+        from telethon.tl.types import DocumentAttributeSticker, MessageMediaDocument
+        if not isinstance(media, MessageMediaDocument):
+            return False
+        doc = getattr(media, 'document', None)
+        if not doc:
+            return False
+        return any(isinstance(a, DocumentAttributeSticker)
+                   for a in getattr(doc, 'attributes', []))
+    except Exception:
+        return False
+
+
+def _with_watermark(text: str, entities: list, user_id: int) -> tuple[str, list | None]:
+    """Добавляет watermark жирным текстом через entity, не через markdown."""
     if has_active_sub(user_id):
-        return text
-    wm = f'**{WATERMARK_TEXT}**'
-    return f'{text}\n\n{wm}' if text else wm
+        return text, entities or None
+    from telethon.tl.types import MessageEntityBold
+    sep    = '\n\n'
+    prefix = (text + sep) if text else ''
+    wm_off = _utf16_len(prefix)
+    wm_ent = MessageEntityBold(offset=wm_off, length=_utf16_len(WATERMARK_TEXT))
+    ents   = list(entities or []) + [wm_ent]
+    return prefix + WATERMARK_TEXT, ents
 
 
-async def _send_one(client, chat, text: str, media: Any, user_id: int):
+async def _send_one(client, chat, text: str, entities: list, media: Any, user_id: int):
     from telethon.errors import FloodWaitError
     chat_id = getattr(chat, 'id', chat)
     if is_blacklisted(user_id, chat_id):
         return
-    final = _apply_watermark(text or '', user_id)
     for attempt in range(2):
         try:
             if media:
-                await client.send_file(chat, media, caption=final or None)
+                if _is_sticker(media):
+                    # У стикеров нет caption; отправляем стикер, затем watermark отдельно
+                    await client.send_file(chat, media.document)
+                    if not has_active_sub(user_id):
+                        from telethon.tl.types import MessageEntityBold
+                        wlen = _utf16_len(WATERMARK_TEXT)
+                        await client.send_message(
+                            chat, WATERMARK_TEXT,
+                            formatting_entities=[MessageEntityBold(offset=0, length=wlen)],
+                        )
+                else:
+                    final_text, final_ents = _with_watermark(text or '', entities, user_id)
+                    file_obj = (getattr(media, 'document', None)
+                                or getattr(media, 'photo', None)
+                                or media)
+                    await client.send_file(
+                        chat, file_obj,
+                        caption=final_text or None,
+                        formatting_entities=final_ents if final_text else None,
+                    )
             else:
-                await client.send_message(chat, final)
+                final_text, final_ents = _with_watermark(text or '', entities, user_id)
+                await client.send_message(
+                    chat, final_text,
+                    formatting_entities=final_ents,
+                )
             return
         except FloodWaitError as e:
             if attempt == 0:
@@ -136,7 +199,8 @@ async def run_flood(task: FloodTask, client):
             if task.stopped:
                 break
             try:
-                await _send_one(client, task.chat_id, task.text, task.media, task.user_id)
+                await _send_one(client, task.chat_id, task.text,
+                               task.entities or [], task.media, task.user_id)
                 task.sent += 1
             except Exception as e:
                 print(f'[flood#{task.id}] {e}')
@@ -159,7 +223,8 @@ async def run_gflood(task: FloodTask, client):
 
     async def _send_with_log(c):
         try:
-            await _send_one(client, c, task.text, task.media, task.user_id)
+            await _send_one(client, c, task.text,
+                           task.entities or [], task.media, task.user_id)
             task.sent += 1
         except Exception as e:
             name   = getattr(c, 'title', None) or getattr(c, 'first_name', str(c))
@@ -421,6 +486,7 @@ async def _launch_gflood(client, user_id: int, folder_id: int,
         delay=cfg['delay'], count=cfg['count'],
         target_chats=chats, gflood_mode=cfg['mode'],
         tmpl_name=cfg.get('tmpl_name'),
+        entities=cfg.get('entities') or [],
     )
     _t_add(t)
     t.asyncio_task = _asyncio.get_running_loop().create_task(run_gflood(t, client))

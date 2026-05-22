@@ -19,11 +19,13 @@ from tasks import (
     _id_gen,
     _send_card,
     _send_tasks_list,
+    _slice_entities,
     _t_add,
     _t_all,
     _t_by_chat,
     _t_del,
     _t_get,
+    _utf16_len,
     run_flood,
     run_gflood,
 )
@@ -71,16 +73,23 @@ async def _cmd_flood(event, client, user_id: int):
         body  = parts[3] if len(parts) > 3 else ''
     except (IndexError, ValueError):
         return
+
+    # Вырезаем entities только для части body
+    prefix     = text[: len(text) - len(body)] if body else text
+    body_ents  = _slice_entities(event.message.entities or [], _utf16_len(prefix))
+
     body, tmpl_name = _apply_tmpl(body, user_id)
     if body is None:
         await event.message.edit('❌ Шаблон не найден')
         await asyncio.sleep(1)
         await event.message.delete()
         return
+    if tmpl_name:
+        body_ents = []  # шаблон хранится как plain text
 
     chat  = await event.get_chat()
     title = getattr(chat, 'title', None) or getattr(chat, 'first_name', str(event.chat_id))
-    media = event.message.media  # сохраняем до удаления
+    media = event.message.media
     chat_id = event.chat_id
 
     try:
@@ -91,7 +100,7 @@ async def _cmd_flood(event, client, user_id: int):
     t = FloodTask(
         id=next(_id_gen), user_id=user_id,
         chat_id=chat_id, chat_title=title,
-        text=body, media=media,
+        text=body, media=media, entities=body_ents,
         delay=delay, count=count,
         tmpl_name=tmpl_name,
     )
@@ -134,12 +143,18 @@ async def _cmd_gflood(event, client, user_id: int, chat_id_bot: int, main_loop):
         body  = parts[4] if len(parts) > 4 else ''
     except (IndexError, ValueError):
         return
+    # Вырезаем entities только для части body
+    prefix    = text[: len(text) - len(body)] if body else text
+    body_ents = _slice_entities(event.message.entities or [], _utf16_len(prefix))
+
     body, tmpl_name = _apply_tmpl(body, user_id)
     if body is None:
         await event.message.edit('❌ Шаблон не найден')
         await asyncio.sleep(1)
         await event.message.delete()
         return
+    if tmpl_name:
+        body_ents = []  # шаблон хранится как plain text
 
     media = event.message.media   # сохраняем до удаления
     await event.message.delete()
@@ -160,6 +175,7 @@ async def _cmd_gflood(event, client, user_id: int, chat_id_bot: int, main_loop):
     pending_gflood[user_id] = {
         'delay': delay, 'count': count, 'mode': mode,
         'text':  body,  'media': media, 'tmpl_name': tmpl_name,
+        'entities': body_ents,
     }
 
     rows = [
