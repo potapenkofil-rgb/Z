@@ -322,7 +322,9 @@ async def cmd_template_media(message: Message):
 
     os.makedirs('sessions/media_templates', exist_ok=True)
     safe_name = re.sub(r'[^\w\-]', '_', name)
-    dest = f'sessions/media_templates/{uid}_{safe_name}'
+    user_dir  = f'sessions/media_templates/{uid}'
+    os.makedirs(user_dir, exist_ok=True)
+    dest = f'{user_dir}/{safe_name}'
 
     if message.photo:
         file_id = message.photo[-1].file_id
