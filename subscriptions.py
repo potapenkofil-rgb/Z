@@ -45,6 +45,15 @@ def init_db():
             )
         ''')
         c.execute('''
+            CREATE TABLE IF NOT EXISTS referrals (
+                inviter_id INTEGER NOT NULL,
+                invitee_id INTEGER NOT NULL,
+                rewarded   INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (invitee_id)
+            )
+        ''')
+        c.execute('''
             CREATE TABLE IF NOT EXISTS running_tasks (
                 id         INTEGER NOT NULL,
                 user_id    INTEGER NOT NULL,
@@ -251,3 +260,38 @@ def get_all_running_tasks() -> list[dict]:
 def clear_running_tasks() -> None:
     with _conn() as c:
         c.execute('DELETE FROM running_tasks')
+
+
+# ── Referrals ──────────────────────────────────────────────────────
+
+def add_referral(inviter_id: int, invitee_id: int) -> bool:
+    """Returns True if referral was saved (first time), False if already exists."""
+    try:
+        with _conn() as c:
+            c.execute(
+                'INSERT OR IGNORE INTO referrals(inviter_id, invitee_id, rewarded, created_at) '
+                'VALUES (?, ?, 0, ?)',
+                (inviter_id, invitee_id, int(time.time())),
+            )
+            return c.execute(
+                'SELECT changes() as n'
+            ).fetchone()['n'] > 0
+    except Exception:
+        return False
+
+
+def get_referral_inviter(invitee_id: int) -> Optional[int]:
+    with _conn() as c:
+        row = c.execute(
+            'SELECT inviter_id FROM referrals WHERE invitee_id=? AND rewarded=0',
+            (invitee_id,),
+        ).fetchone()
+    return row['inviter_id'] if row else None
+
+
+def mark_referral_rewarded(invitee_id: int):
+    with _conn() as c:
+        c.execute(
+            'UPDATE referrals SET rewarded=1 WHERE invitee_id=?',
+            (invitee_id,),
+        )

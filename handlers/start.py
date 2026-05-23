@@ -2,6 +2,7 @@ import asyncio
 import time
 
 from aiogram import F, Router
+from aiogram.filters import CommandStart, CommandObject
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -11,7 +12,7 @@ from aiogram.types import (
 
 from sessions import is_admin, load_meta, save_meta
 from state import userbot_refs
-from subscriptions import get_expiry, has_active_sub
+from subscriptions import add_referral, get_expiry, has_active_sub
 from userbot import connect_and_run
 
 router = Router()
@@ -73,10 +74,19 @@ def _main_menu_kb(uid: int) -> InlineKeyboardMarkup:
 # /start
 # ─────────────────────────────────────────────────────────────────
 
-@router.message(F.text == '/start')
-async def cmd_start(message: Message):
+@router.message(CommandStart())
+async def cmd_start(message: Message, command: CommandObject):
     meta = load_meta()
     uid  = message.from_user.id
+
+    ref_param = command.args
+    if ref_param and ref_param.startswith('ref_'):
+        try:
+            inviter_id = int(ref_param[4:])
+            if inviter_id != uid:
+                add_referral(inviter_id, uid)
+        except (ValueError, Exception):
+            pass
 
     if str(uid) in meta:
         # Если тред ещё не запущен — запускаем в фоне

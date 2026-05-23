@@ -14,12 +14,17 @@ def init_templates_db():
     with _conn() as c:
         c.execute('''
             CREATE TABLE IF NOT EXISTS templates (
-                user_id INTEGER,
-                name    TEXT,
-                text    TEXT NOT NULL,
+                user_id    INTEGER,
+                name       TEXT,
+                text       TEXT NOT NULL,
+                media_path TEXT DEFAULT NULL,
                 PRIMARY KEY (user_id, name)
             )
         ''')
+        try:
+            c.execute('ALTER TABLE templates ADD COLUMN media_path TEXT DEFAULT NULL')
+        except Exception:
+            pass
         c.execute('''
             CREATE TABLE IF NOT EXISTS blacklist (
                 user_id    INTEGER,
@@ -32,21 +37,22 @@ def init_templates_db():
 
 # ── Templates ──────────────────────────────────────────────────────
 
-def save_template(user_id: int, name: str, text: str):
+def save_template(user_id: int, name: str, text: str, media_path: str | None = None):
     with _conn() as c:
         c.execute(
-            'INSERT OR REPLACE INTO templates(user_id, name, text) VALUES (?,?,?)',
-            (user_id, name, text),
+            'INSERT OR REPLACE INTO templates(user_id, name, text, media_path) VALUES (?,?,?,?)',
+            (user_id, name, text, media_path),
         )
 
 
-def get_template(user_id: int, name: str) -> str | None:
+def get_template(user_id: int, name: str) -> dict | None:
+    """Returns {'text': ..., 'media_path': ...} or None."""
     with _conn() as c:
         row = c.execute(
-            'SELECT text FROM templates WHERE user_id=? AND name=?',
+            'SELECT text, media_path FROM templates WHERE user_id=? AND name=?',
             (user_id, name),
         ).fetchone()
-    return row['text'] if row else None
+    return {'text': row['text'], 'media_path': row['media_path']} if row else None
 
 
 def list_templates(user_id: int) -> list[tuple[int, str, str]]:
@@ -59,21 +65,22 @@ def list_templates(user_id: int) -> list[tuple[int, str, str]]:
     return [(r['rowid'], r['name'], r['text']) for r in rows]
 
 
-def get_template_by_rowid(rowid: int, user_id: int) -> tuple[str, str] | None:
-    """Returns (name, text) or None."""
+def get_template_by_rowid(rowid: int, user_id: int) -> tuple[str, str, str | None] | None:
+    """Returns (name, text, media_path) or None."""
     with _conn() as c:
         row = c.execute(
-            'SELECT name, text FROM templates WHERE rowid=? AND user_id=?',
+            'SELECT name, text, media_path FROM templates WHERE rowid=? AND user_id=?',
             (rowid, user_id),
         ).fetchone()
-    return (row['name'], row['text']) if row else None
+    return (row['name'], row['text'], row['media_path']) if row else None
 
 
-def update_template(rowid: int, user_id: int, new_name: str, new_text: str) -> bool:
+def update_template(rowid: int, user_id: int, new_name: str, new_text: str,
+                    media_path: str | None = None) -> bool:
     with _conn() as c:
         cur = c.execute(
-            'UPDATE templates SET name=?, text=? WHERE rowid=? AND user_id=?',
-            (new_name, new_text, rowid, user_id),
+            'UPDATE templates SET name=?, text=?, media_path=? WHERE rowid=? AND user_id=?',
+            (new_name, new_text, media_path, rowid, user_id),
         )
     return cur.rowcount > 0
 
