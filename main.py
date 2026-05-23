@@ -1,7 +1,10 @@
 import asyncio
 
-from aiogram import BaseMiddleware
-from aiogram.types import CallbackQuery, Message
+from aiogram import BaseMiddleware, F, Router
+from aiogram.exceptions import TelegramForbiddenError
+from aiogram.types import (
+    CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message,
+)
 
 from config import bot, dp
 from cryptopay import get_invoice
@@ -52,6 +55,78 @@ class BanMiddleware(BaseMiddleware):
 
 dp.message.middleware(BanMiddleware())
 dp.callback_query.middleware(BanMiddleware())
+
+# ─────────────────────────────────────────────────────────────────
+# Channel subscription middleware
+# ─────────────────────────────────────────────────────────────────
+
+def _sub_check_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text='📢 Подписаться',  url=f'https://t.me/{config.REQUIRED_CHANNEL.lstrip("@")}')],
+        [InlineKeyboardButton(text='✅ Я подписался', callback_data='check_channel_sub')],
+    ])
+
+async def _is_subscribed(user_id: int) -> bool:
+    if not config.REQUIRED_CHANNEL:
+        return True
+    try:
+        member = await bot.get_chat_member(config.REQUIRED_CHANNEL, user_id)
+        return member.status not in ('left', 'kicked')
+    except TelegramForbiddenError:
+        return True  # бот не в канале — не блокируем
+    except Exception:
+        return True  # при ошибке пропускаем
+
+_SUB_TEXT = (
+    '📢 <b>Для использования бота нужно подписаться на канал</b>\n\n'
+    'После подписки нажми кнопку ниже.'
+)
+
+class ChannelSubMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        user = getattr(event, 'from_user', None)
+        if not user or is_admin(user.id):
+            return await handler(event, data)
+        # Кнопку "Я подписался" всегда пропускаем — иначе не обработать
+        if isinstance(event, CallbackQuery) and event.data == 'check_channel_sub':
+            return await handler(event, data)
+        if not await _is_subscribed(user.id):
+            if isinstance(event, CallbackQuery):
+                await event.answer('Сначала подпишись на канал!', show_alert=True)
+            else:
+                await event.answer(_SUB_TEXT, parse_mode='HTML', reply_markup=_sub_check_kb())
+            return
+        return await handler(event, data)
+
+if config.REQUIRED_CHANNEL:
+    dp.message.middleware(ChannelSubMiddleware())
+    dp.callback_query.middleware(ChannelSubMiddleware())
+
+# ─────────────────────────────────────────────────────────────────
+# "Я подписался" callback
+# ─────────────────────────────────────────────────────────────────
+
+_check_router = Router()
+dp.include_router(_check_router)
+
+@_check_router.callback_query(F.data == 'check_channel_sub')
+async def cb_check_channel_sub(callback: CallbackQuery):
+    if await _is_subscribed(callback.from_user.id):
+        await callback.message.delete()
+        await callback.answer('✅ Доступ открыт!', show_alert=False)
+        # Показываем /start
+        from handlers.start import _welcome_text, _welcome_kb, _main_menu_text, _main_menu_kb
+        from sessions import load_meta
+        meta = load_meta()
+        uid  = callback.from_user.id
+        if str(uid) in meta:
+            await callback.message.answer(_main_menu_text(), parse_mode='HTML',
+                                          reply_markup=_main_menu_kb(uid))
+        else:
+            await callback.message.answer(_welcome_text(), parse_mode='HTML',
+                                          reply_markup=_welcome_kb())
+    else:
+        await callback.answer('❌ Ты ещё не подписан!', show_alert=True)
 
 # ─────────────────────────────────────────────────────────────────
 # Session restore on startup

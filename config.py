@@ -48,7 +48,8 @@ SUB_TIERS: dict[str, tuple[float, int]] = {
     '12m': (24.0, 365),
 }
 
-WATERMARK_TEXT = 'Лучший бот для рассыла: @rassyl_W_robot'
+WATERMARK_TEXT     = 'Лучший бот для рассыла: @rassyl_W_robot'
+REQUIRED_CHANNEL   = os.environ.get('REQUIRED_CHANNEL', '').strip()
 
 # ─── Bot & Dispatcher ─────────────────────────────────────────────
 
