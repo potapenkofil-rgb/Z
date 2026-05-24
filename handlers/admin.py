@@ -37,6 +37,11 @@ router = Router()
 # FSM States
 # ─────────────────────────────────────────────────────────────────
 
+class CheckerUserOverride(StatesGroup):
+    enter_uid = State()
+    pick_mode = State()
+
+
 class AdminAuth(StatesGroup):
     api_id   = State()
     api_hash = State()
@@ -77,6 +82,7 @@ def _admin_panel_text() -> str:
 def _admin_panel_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text='📱 Аккаунт ловца чеков', callback_data='adm_account')],
+        [InlineKeyboardButton(text='⚙️ Настройки ловца',     callback_data='adm_checker_cfg')],
         [InlineKeyboardButton(text='👥 Управление админами', callback_data='adm_admins')],
         [InlineKeyboardButton(text='💎 Подписки',            callback_data='adm_subs')],
         [InlineKeyboardButton(text='📊 Статистика',          callback_data='adm_stats')],
@@ -946,3 +952,162 @@ async def cb_adm_ad_reject(callback: CallbackQuery):
             [InlineKeyboardButton(text='◀️ К списку', callback_data='adm_ads')],
         ]),
     )
+
+
+# ─────────────────────────────────────────────────────────────────
+# Настройки ловца чеков
+# ─────────────────────────────────────────────────────────────────
+
+def _checker_cfg_text() -> str:
+    from settings import MODE_ALL, get_global_checker_mode, get_all_user_overrides
+    global_mode  = get_global_checker_mode()
+    global_label = '✅ Чаты + каналы + ЛС' if global_mode == MODE_ALL else '⛔ Только чаты и каналы'
+    overrides    = get_all_user_overrides()
+    lines = [
+        '⚙️ <b>Настройки ловца чеков</b>\n',
+        f'🌐 Глобально: <b>{global_label}</b>\n',
+    ]
+    if overrides:
+        lines.append('👤 <b>Индивидуальные настройки:</b>')
+        for o in overrides:
+            olabel = '✅ +ЛС' if o['mode'] == MODE_ALL else '⛔ без ЛС'
+            lines.append(f'  • <code>{o["user_id"]}</code> — {olabel}')
+    else:
+        lines.append('👤 Индивидуальных настроек нет')
+    return '\n'.join(lines)
+
+
+def _checker_cfg_kb() -> InlineKeyboardMarkup:
+    from settings import MODE_ALL, get_global_checker_mode
+    global_mode = get_global_checker_mode()
+    if global_mode == MODE_ALL:
+        toggle_text = '⛔ Выключить ЛС глобально'
+        toggle_data = 'adm_chk_global_no_dm'
+    else:
+        toggle_text = '✅ Включить ЛС глобально'
+        toggle_data = 'adm_chk_global_all'
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=toggle_text,                callback_data=toggle_data)],
+        [InlineKeyboardButton(text='➕ Настроить пользователя', callback_data='adm_chk_user_add')],
+        [InlineKeyboardButton(text='🗑 Сбросить все',           callback_data='adm_chk_user_clr_all')],
+        [InlineKeyboardButton(text='◀️ Назад',                  callback_data='adm_back')],
+    ])
+
+
+@router.callback_query(F.data == 'adm_checker_cfg')
+async def cb_adm_checker_cfg(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer('Нет доступа')
+        return
+    try:
+        await callback.message.edit_text(
+            _checker_cfg_text(), parse_mode='HTML', reply_markup=_checker_cfg_kb(),
+        )
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@router.callback_query(F.data.in_({'adm_chk_global_all', 'adm_chk_global_no_dm'}))
+async def cb_adm_chk_global(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer('Нет доступа')
+        return
+    from settings import MODE_ALL, MODE_NO_DM, set_global_checker_mode
+    mode = MODE_ALL if callback.data == 'adm_chk_global_all' else MODE_NO_DM
+    set_global_checker_mode(mode)
+    label = '✅ ЛС включены глобально' if mode == MODE_ALL else '⛔ ЛС выключены глобально'
+    await callback.answer(label)
+    try:
+        await callback.message.edit_text(
+            _checker_cfg_text(), parse_mode='HTML', reply_markup=_checker_cfg_kb(),
+        )
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data == 'adm_chk_user_add')
+async def cb_adm_chk_user_add(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer('Нет доступа')
+        return
+    await state.set_state(CheckerUserOverride.enter_uid)
+    await callback.message.answer(
+        '👤 Введите числовой ID пользователя:',
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text='❌ Отмена', callback_data='adm_checker_cfg')],
+        ]),
+    )
+    await callback.answer()
+
+
+@router.message(CheckerUserOverride.enter_uid)
+async def step_chk_user_uid(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        target_id = int(message.text.strip())
+    except ValueError:
+        await message.answer('❌ ID должен быть числом.')
+        return
+    await state.update_data(target_id=target_id)
+    await state.set_state(CheckerUserOverride.pick_mode)
+
+    from settings import MODE_ALL, get_user_checker_mode
+    cur = get_user_checker_mode(target_id)
+    cur_label = {
+        MODE_ALL:  '✅ Чаты + каналы + ЛС',
+        'no_dm':   '⛔ Только чаты и каналы',
+        'inherit': '↩️ По глобальной настройке',
+    }.get(cur, cur)
+
+    await message.answer(
+        f'👤 Пользователь <code>{target_id}</code>\n'
+        f'Текущий режим: <b>{cur_label}</b>\n\n'
+        'Выберите режим:',
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text='✅ Чаты + каналы + ЛС',     callback_data='chk_mode_all')],
+            [InlineKeyboardButton(text='⛔ Только чаты и каналы',    callback_data='chk_mode_no_dm')],
+            [InlineKeyboardButton(text='↩️ По глобальной настройке', callback_data='chk_mode_inherit')],
+            [InlineKeyboardButton(text='❌ Отмена',                   callback_data='adm_checker_cfg')],
+        ]),
+    )
+
+
+@router.callback_query(CheckerUserOverride.pick_mode, F.data.startswith('chk_mode_'))
+async def cb_chk_mode_pick(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer('Нет доступа')
+        return
+    data      = await state.get_data()
+    target_id = data.get('target_id')
+    mode      = callback.data.replace('chk_mode_', '')
+    from settings import set_user_checker_mode
+    set_user_checker_mode(target_id, mode)
+    await state.clear()
+    labels = {'all': '✅ +ЛС', 'no_dm': '⛔ без ЛС', 'inherit': '↩️ По умолчанию'}
+    await callback.answer(f'Сохранено: {labels.get(mode, mode)}')
+    try:
+        await callback.message.edit_text(
+            _checker_cfg_text(), parse_mode='HTML', reply_markup=_checker_cfg_kb(),
+        )
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data == 'adm_chk_user_clr_all')
+async def cb_adm_chk_clr_all(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer('Нет доступа')
+        return
+    from settings import get_all_user_overrides, set_user_checker_mode
+    for o in get_all_user_overrides():
+        set_user_checker_mode(o['user_id'], 'inherit')
+    await callback.answer('✅ Все индивидуальные настройки сброшены')
+    try:
+        await callback.message.edit_text(
+            _checker_cfg_text(), parse_mode='HTML', reply_markup=_checker_cfg_kb(),
+        )
+    except Exception:
+        pass
