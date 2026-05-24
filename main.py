@@ -143,7 +143,7 @@ async def cb_check_channel_sub(callback: CallbackQuery):
         meta = load_meta()
         uid  = callback.from_user.id
         if str(uid) in meta:
-            await callback.message.answer(_main_menu_text(), parse_mode='HTML',
+            await callback.message.answer(_main_menu_text(uid), parse_mode='HTML',
                                           reply_markup=_main_menu_kb(uid))
         else:
             await callback.message.answer(_welcome_text(), parse_mode='HTML',
