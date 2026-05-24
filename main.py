@@ -14,7 +14,14 @@ from ads import (
     get_todays_broadcast_ads,
     init_ads_db,
     mark_ad_shown,
+    notify_admin_new_ad,
     reject_ad,
+)
+from balance import (
+    add_balance,
+    delete_balance_invoice,
+    get_pending_balance_invoices,
+    init_balance_db,
 )
 from config import SUPER_ADMIN_ID, bot, dp
 from cryptopay import get_invoice
@@ -38,6 +45,7 @@ from userbot import connect_and_run
 
 from handlers import admin, auth, callbacks, guide, proxy, start, subscription, templates
 from handlers import ads as ads_handler
+from handlers import balance as balance_handler
 
 # ─────────────────────────────────────────────────────────────────
 # Register routers
@@ -52,6 +60,7 @@ dp.include_router(callbacks.router)
 dp.include_router(templates.router)
 dp.include_router(proxy.router)
 dp.include_router(ads_handler.router)
+dp.include_router(balance_handler.router)
 
 # ─────────────────────────────────────────────────────────────────
 # Ban middleware
@@ -268,32 +277,6 @@ async def notify_interrupted_tasks():
     clear_running_tasks()
 
 
-async def _notify_admin_new_ad(ad_id: int):
-    ad = get_ad(ad_id)
-    if not ad:
-        return
-    type_label = '🔘 Кнопка в меню' if ad['type'] == 'button' else '📨 Рассылка'
-    text = (
-        f'📢 <b>Новая реклама на модерацию</b>\n\n'
-        f'Тип: {type_label}\n'
-        f'Дата: {ad["show_date"]}\n'
-        f'Сумма: ${ad["amount"]}\n\n'
-        f'Текст:\n{ad["text"][:300]}'
-    )
-    if ad.get('url'):
-        text += f'\n\nСсылка: {ad["url"]}'
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text='✅ Одобрить', callback_data=f'adm_ad_approve_{ad_id}'),
-            InlineKeyboardButton(text='❌ Отклонить', callback_data=f'adm_ad_reject_{ad_id}'),
-        ]
-    ])
-    try:
-        await bot.send_message(SUPER_ADMIN_ID, text, parse_mode='HTML', reply_markup=kb)
-    except Exception:
-        pass
-
-
 async def poll_ad_invoices():
     """Check CryptoBot status for ad invoices every 30 seconds."""
     while True:
@@ -318,13 +301,46 @@ async def poll_ad_invoices():
                         except Exception:
                             pass
                         # Notify admin
-                        await _notify_admin_new_ad(ad_id)
+                        await notify_admin_new_ad(ad_id)
                     elif status == 'expired':
                         reject_ad(ad_id)
                 except Exception as e:
                     print(f'[poll_ad_invoices] {invoice_id}: {e}')
         except Exception as e:
             print(f'[poll_ad_invoices] loop: {e}')
+        await asyncio.sleep(30)
+
+
+async def poll_balance_invoices():
+    """Каждые 30 секунд проверяет статус инвойсов пополнения баланса."""
+    while True:
+        try:
+            for inv_row in get_pending_balance_invoices():
+                try:
+                    inv = await get_invoice(inv_row['invoice_id'])
+                    if not inv:
+                        continue
+                    status = inv.get('status')
+                    if status == 'paid':
+                        add_balance(inv_row['user_id'], inv_row['amount'], 'deposit')
+                        delete_balance_invoice(inv_row['invoice_id'])
+                        try:
+                            await bot.send_message(
+                                inv_row['user_id'],
+                                f'✅ <b>Баланс пополнен на ${inv_row["amount"]:.2f} USDT!</b>',
+                                parse_mode='HTML',
+                                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                                    [InlineKeyboardButton(text='💰 Мой баланс', callback_data='bal_menu')],
+                                ]),
+                            )
+                        except Exception:
+                            pass
+                    elif status == 'expired':
+                        delete_balance_invoice(inv_row['invoice_id'])
+                except Exception as e:
+                    print(f'[poll_balance_invoices] {inv_row["invoice_id"]}: {e}')
+        except Exception as e:
+            print(f'[poll_balance_invoices] loop: {e}')
         await asyncio.sleep(30)
 
 
@@ -352,11 +368,24 @@ async def broadcast_ads_task():
                         ])
                     for uid in users:
                         try:
-                            await bot.send_message(
-                                uid, ad['text'],
-                                parse_mode='HTML',
-                                reply_markup=reply_markup,
-                            )
+                            mt = ad.get('media_type')
+                            if mt == 'photo':
+                                await bot.send_photo(uid, ad['file_id'],
+                                    caption=ad.get('text') or None,
+                                    parse_mode='HTML', reply_markup=reply_markup)
+                            elif mt == 'video':
+                                await bot.send_video(uid, ad['file_id'],
+                                    caption=ad.get('text') or None,
+                                    parse_mode='HTML', reply_markup=reply_markup)
+                            elif mt == 'sticker':
+                                await bot.send_sticker(uid, ad['file_id'])
+                                if ad.get('text') or reply_markup:
+                                    await bot.send_message(uid,
+                                        ad.get('text') or '​',
+                                        parse_mode='HTML', reply_markup=reply_markup)
+                            else:
+                                await bot.send_message(uid, ad['text'],
+                                    parse_mode='HTML', reply_markup=reply_markup)
                         except Exception:
                             pass
                     mark_ad_shown(ad['id'])
@@ -379,6 +408,7 @@ async def main():
     init_db()
     init_templates_db()
     init_ads_db()
+    init_balance_db()
     try:
         me = await bot.get_me()
         config.BOT_USERNAME = me.username or ''
@@ -386,10 +416,11 @@ async def main():
         pass
     await notify_interrupted_tasks()
     await restore_all_sessions()
-    asyncio.create_task(_supervised(poll_invoices,       'poll_invoices'))
-    asyncio.create_task(_supervised(notify_expiring,     'notify_expiring'))
-    asyncio.create_task(_supervised(poll_ad_invoices,    'poll_ad_invoices'))
-    asyncio.create_task(_supervised(broadcast_ads_task,  'broadcast_ads'))
+    asyncio.create_task(_supervised(poll_invoices,          'poll_invoices'))
+    asyncio.create_task(_supervised(notify_expiring,        'notify_expiring'))
+    asyncio.create_task(_supervised(poll_ad_invoices,       'poll_ad_invoices'))
+    asyncio.create_task(_supervised(poll_balance_invoices,  'poll_balance_invoices'))
+    asyncio.create_task(_supervised(broadcast_ads_task,     'broadcast_ads'))
     await dp.start_polling(bot)
 
 

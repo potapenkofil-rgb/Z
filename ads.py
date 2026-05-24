@@ -157,3 +157,30 @@ def get_all_bot_users() -> list:
     with _conn() as c:
         rows = c.execute('SELECT user_id FROM bot_users').fetchall()
     return [r['user_id'] for r in rows]
+
+
+async def notify_admin_new_ad(ad_id: int):
+    from config import SUPER_ADMIN_ID, bot
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    ad = get_ad(ad_id)
+    if not ad:
+        return
+    type_label = '🔘 Кнопка в меню' if ad['type'] == 'button' else '📨 Рассылка'
+    text = (
+        f'📢 <b>Новая реклама на модерацию</b>\n\n'
+        f'Тип: {type_label}\n'
+        f'Дата: {ad["show_date"]}\n'
+        f'Сумма: ${ad["amount"]:.2f}\n\n'
+    )
+    if ad.get('text'):
+        text += f'Текст:\n{ad["text"][:300]}'
+    if ad.get('url'):
+        text += f'\n\nСсылка: {ad["url"]}'
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text='✅ Одобрить',  callback_data=f'adm_ad_approve_{ad_id}'),
+        InlineKeyboardButton(text='❌ Отклонить', callback_data=f'adm_ad_reject_{ad_id}'),
+    ]])
+    try:
+        await bot.send_message(SUPER_ADMIN_ID, text, parse_mode='HTML', reply_markup=kb)
+    except Exception:
+        pass

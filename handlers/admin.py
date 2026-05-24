@@ -368,17 +368,20 @@ async def _finish_adm_auth(message: Message, state: FSMContext,
 # ─────────────────────────────────────────────────────────────────
 
 def _sub_card_text(target_id: int, name: str) -> str:
+    from balance import get_balance
     if has_active_sub(target_id):
         expiry = get_expiry(target_id)
         days   = max(0, (expiry - int(time.time())) // 86400)
         status = f'✅ Активна, {days} дн.'
     else:
         status = '❌ Не активна'
+    bal = get_balance(target_id)
     return (
         f'💎 <b>Подписка пользователя</b>\n\n'
         f'👤 {name}\n'
         f'🆔 <code>{target_id}</code>\n'
-        f'📌 Статус: {status}'
+        f'📌 Подписка: {status}\n'
+        f'💰 Баланс: ${bal:.2f}'
     )
 
 
@@ -388,7 +391,11 @@ def _sub_card_kb(target_id: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text='➕ Выдать 30д',   callback_data=f'adm_sg_{target_id}'),
             InlineKeyboardButton(text='🔄 +30 дней',     callback_data=f'adm_se_{target_id}'),
         ],
-        [InlineKeyboardButton(text='❌ Забрать',          callback_data=f'adm_sr_{target_id}')],
+        [InlineKeyboardButton(text='❌ Забрать подписку', callback_data=f'adm_sr_{target_id}')],
+        [
+            InlineKeyboardButton(text='💰 +$5 баланс',   callback_data=f'adm_bal_add_{target_id}'),
+            InlineKeyboardButton(text='🗑 Сброс баланса', callback_data=f'adm_bal_clr_{target_id}'),
+        ],
         [InlineKeyboardButton(text='◀️ Назад',            callback_data='adm_subs')],
     ])
 
@@ -504,6 +511,42 @@ async def cb_sub_revoke(callback: CallbackQuery):
     target_id = int(callback.data[7:])
     revoke_sub(target_id)
     await callback.answer('✅ Подписка забрана')
+    await callback.message.edit_text(
+        _sub_card_text(target_id, f'ID {target_id}'), parse_mode='HTML',
+        reply_markup=_sub_card_kb(target_id),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────
+# Управление балансом пользователя
+# ─────────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith('adm_bal_add_'))
+async def cb_adm_bal_add(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer('Нет доступа')
+        return
+    from balance import admin_adjust_balance
+    target_id = int(callback.data[12:])
+    admin_adjust_balance(target_id, 5.0, callback.from_user.id)
+    await callback.answer('✅ +$5 добавлено')
+    await callback.message.edit_text(
+        _sub_card_text(target_id, f'ID {target_id}'), parse_mode='HTML',
+        reply_markup=_sub_card_kb(target_id),
+    )
+
+
+@router.callback_query(F.data.startswith('adm_bal_clr_'))
+async def cb_adm_bal_clr(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer('Нет доступа')
+        return
+    from balance import get_balance, admin_adjust_balance
+    target_id = int(callback.data[12:])
+    bal = get_balance(target_id)
+    if bal > 0:
+        admin_adjust_balance(target_id, -bal, callback.from_user.id)
+    await callback.answer('✅ Баланс обнулён')
     await callback.message.edit_text(
         _sub_card_text(target_id, f'ID {target_id}'), parse_mode='HTML',
         reply_markup=_sub_card_kb(target_id),
@@ -873,26 +916,31 @@ async def cb_adm_ad_reject(callback: CallbackQuery):
     if not ad:
         await callback.answer('❌ Объявление не найдено', show_alert=True)
         return
+    from balance import add_balance
     reject_ad(ad_id)
-    refund = ad['amount'] * 0.5
+    refund     = round(ad['amount'] * 0.5, 2)
     type_label = '🔘 Кнопка в меню' if ad['type'] == 'button' else '📨 Рассылка'
-    # Notify user
+    # Зачисляем возврат на баланс
+    add_balance(ad['user_id'], refund, 'refund', f'Отклонение рекламы #{ad_id}')
+    # Уведомляем пользователя
     try:
         await callback.bot.send_message(
             ad['user_id'],
-            f'❌ <b>Реклама отклонена</b>\n\n'
+            f'❌ <b>Реклама отклонена администратором</b>\n\n'
             f'Тип: {type_label}\n'
             f'Дата: <b>{ad["show_date"]}</b>\n\n'
-            f'К сожалению, ваша реклама была отклонена модератором.\n'
-            f'Возврат 50%: <b>${refund:.2f} USDT</b> будет обработан вручную.\n\n'
-            f'По вопросам обращайтесь к администратору.',
+            f'На ваш баланс зачислено <b>${refund:.2f} USDT</b> (50% от суммы оплаты).',
             parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text='💰 Мой баланс', callback_data='bal_menu')],
+            ]),
         )
     except Exception:
         pass
     await callback.answer('❌ Отклонено')
     await callback.message.edit_text(
-        f'❌ Реклама #{ad_id} отклонена. Возврат ${refund:.2f} USDT пользователю <code>{ad["user_id"]}</code>.',
+        f'❌ Реклама #{ad_id} отклонена.\n'
+        f'${refund:.2f} USDT возвращено на баланс пользователя <code>{ad["user_id"]}</code>.',
         parse_mode='HTML',
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text='◀️ К списку', callback_data='adm_ads')],
