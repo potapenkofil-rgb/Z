@@ -10,6 +10,7 @@ from aiogram.types import (
     Message,
 )
 
+from ads import add_bot_user, get_todays_active_button_ad
 from sessions import is_admin, load_meta, save_meta
 from state import userbot_refs
 from subscriptions import add_referral, get_expiry, has_active_sub
@@ -75,7 +76,20 @@ def _main_menu_kb(uid: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text='💎 Подписка',  callback_data='sub_menu'),
             InlineKeyboardButton(text='📖 Команды',   callback_data='guide_main'),
         ],
+        [
+            InlineKeyboardButton(text='📢 Разместить рекламу', callback_data='ads_start'),
+        ],
     ]
+    # Inject active button ad if any
+    try:
+        button_ad = get_todays_active_button_ad()
+        if button_ad:
+            label = button_ad.get('btn_label') or (button_ad['text'][:30] if button_ad.get('text') else '📢 Реклама')
+            url = button_ad.get('url')
+            if url:
+                rows.append([InlineKeyboardButton(text=label, url=url)])
+    except Exception:
+        pass
     if is_admin(uid):
         rows.append([
             InlineKeyboardButton(text='🔐 Админ', callback_data='adm_panel'),
@@ -91,6 +105,12 @@ def _main_menu_kb(uid: int) -> InlineKeyboardMarkup:
 async def cmd_start(message: Message, command: CommandObject):
     meta = load_meta()
     uid  = message.from_user.id
+
+    # Track bot users for broadcast ads
+    try:
+        add_bot_user(uid)
+    except Exception:
+        pass
 
     ref_param = command.args
     if ref_param and ref_param.startswith('ref_'):
