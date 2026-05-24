@@ -21,12 +21,19 @@ def init_ads_db():
             text       TEXT NOT NULL DEFAULT '',
             url        TEXT DEFAULT NULL,
             btn_label  TEXT DEFAULT NULL,
+            media_type TEXT DEFAULT NULL,
+            file_id    TEXT DEFAULT NULL,
             show_date  TEXT NOT NULL,
             amount     REAL NOT NULL,
             invoice_id INTEGER DEFAULT NULL,
             status     TEXT NOT NULL DEFAULT 'unpaid',
             created_at INTEGER NOT NULL
         )''')
+        for col in ('media_type TEXT', 'file_id TEXT'):
+            try:
+                c.execute(f'ALTER TABLE ads ADD COLUMN {col} DEFAULT NULL')
+            except Exception:
+                pass
         c.execute('''CREATE TABLE IF NOT EXISTS bot_users (
             user_id    INTEGER PRIMARY KEY,
             first_seen INTEGER NOT NULL
@@ -36,13 +43,16 @@ def init_ads_db():
 AD_PRICES = {'button': 10.0, 'broadcast': 8.0}
 
 
-def create_ad(user_id, ad_type, text, url, btn_label, show_date) -> int:
+def create_ad(user_id, ad_type, text, url, btn_label, show_date,
+              media_type=None, file_id=None) -> int:
     """Returns new ad id."""
     amount = AD_PRICES[ad_type]
     with _conn() as c:
         cur = c.execute(
-            'INSERT INTO ads(user_id,type,text,url,btn_label,show_date,amount,created_at) VALUES(?,?,?,?,?,?,?,?)',
-            (user_id, ad_type, text, url, btn_label, show_date, amount, int(time.time()))
+            'INSERT INTO ads(user_id,type,text,url,btn_label,show_date,amount,'
+            'media_type,file_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+            (user_id, ad_type, text, url, btn_label, show_date, amount,
+             media_type, file_id, int(time.time()))
         )
     return cur.lastrowid
 

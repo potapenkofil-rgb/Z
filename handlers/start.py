@@ -48,11 +48,20 @@ def _welcome_kb() -> InlineKeyboardMarkup:
 def _main_menu_text(uid: int = 0) -> str:
     lines = ['🏠 <b>Главное меню</b>\n']
     if uid:
+        lines.append(f'🪪 ID: <code>{uid}</code>')
         # Статус аккаунта
         if uid in userbot_refs:
             lines.append('🔌 Аккаунт: 🟢 подключён')
         else:
             lines.append('🔌 Аккаунт: 🔴 не подключён')
+        # Прокси
+        meta  = load_meta()
+        proxy = meta.get(str(uid), {}).get('proxy')
+        if proxy:
+            auth = f"{proxy['login']}:***@" if proxy.get('login') else ''
+            lines.append(f'🔀 Прокси: <code>{auth}{proxy["host"]}:{proxy["port"]}</code>')
+        else:
+            lines.append('🔀 Прокси: стандартный')
         # Статус подписки
         if has_active_sub(uid):
             days = max(0, (get_expiry(uid) - int(time.time())) // 86400)
@@ -73,11 +82,12 @@ def _main_menu_kb(uid: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text='🚫 Черный список', callback_data='bl_list'),
         ],
         [
-            InlineKeyboardButton(text='💎 Подписка',  callback_data='sub_menu'),
-            InlineKeyboardButton(text='📖 Команды',   callback_data='guide_main'),
+            InlineKeyboardButton(text='💎 Подписка', callback_data='sub_menu'),
+            InlineKeyboardButton(text='🔌 Прокси',   callback_data='proxy_menu'),
         ],
         [
-            InlineKeyboardButton(text='📢 Разместить рекламу', callback_data='ads_start'),
+            InlineKeyboardButton(text='📖 Команды',         callback_data='guide_main'),
+            InlineKeyboardButton(text='📢 Реклама',          callback_data='ads_start'),
         ],
     ]
     # Inject active button ad if any
