@@ -386,7 +386,18 @@ def run_client_in_thread(user_id: int, api_id: int, api_hash: str,
     session = session_file or f'sessions/{user_id}'
 
     async def run():
-        client = TelegramClient(session, api_id, api_hash, proxy=PROXY)
+        # Пользовательский прокси из meta, иначе серверный
+        _meta = load_meta()
+        _uproxy = _meta.get(str(user_id), {}).get('proxy') if user_id != -1 else None
+        if _uproxy:
+            _login = _uproxy.get('login') or None
+            _pass  = _uproxy.get('password') or None
+            proxy  = ('socks5', _uproxy['host'], int(_uproxy['port']),
+                      True, _login, _pass) if _login else ('socks5', _uproxy['host'], int(_uproxy['port']))
+        else:
+            proxy = PROXY
+
+        client = TelegramClient(session, api_id, api_hash, proxy=proxy)
         await client.connect()
 
         if not await client.is_user_authorized():
