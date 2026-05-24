@@ -12,7 +12,8 @@ from aiogram.types import (
     Message,
 )
 
-from ads import AD_PRICES, create_ad, get_ad, is_slot_taken, set_ad_invoice
+from ads import AD_PRICES, activate_ad, create_ad, get_ad, is_slot_taken, notify_admin_new_ad, set_ad_invoice
+from balance import deduct_balance, get_balance
 from cryptopay import create_invoice
 
 router = Router()
@@ -97,11 +98,19 @@ def _ask_button_kb() -> InlineKeyboardMarkup:
     ])
 
 
-def _confirm_kb(ad_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text='💳 Оплатить', callback_data=f'ads_confirm_{ad_id}')],
-        [InlineKeyboardButton(text='❌ Отмена',   callback_data='ads_cancel')],
-    ])
+def _confirm_kb(ad_id: int, balance: float = 0.0, amount: float = 0.0) -> InlineKeyboardMarkup:
+    rows = []
+    if balance >= amount > 0:
+        rows.append([InlineKeyboardButton(
+            text=f'💰 С баланса  (доступно ${balance:.2f})',
+            callback_data=f'ads_pay_bal_{ad_id}',
+        )])
+    rows.append([InlineKeyboardButton(
+        text='💳 CryptoBot',
+        callback_data=f'ads_confirm_{ad_id}',
+    )])
+    rows.append([InlineKeyboardButton(text='❌ Отмена', callback_data='ads_cancel')])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def _send_ad_preview(message: Message, data: dict):
@@ -151,18 +160,22 @@ async def _go_to_confirm(msg: Message, state: FSMContext, uid: int, edit: bool =
     ad_type   = data['type']
     show_date = data['show_date']
     amount    = AD_PRICES[ad_type]
+    balance   = get_balance(uid)
 
     summary = (
         f'📋 <b>Параметры объявления</b>\n\n'
         f'Тип: {_type_label(ad_type)}\n'
         f'Дата: <b>{show_date}</b>\n'
         f'Стоимость: <b>${amount:.2f} USDT</b>\n'
+        f'Ваш баланс: <b>${balance:.2f}</b>\n'
     )
     if data.get('btn_label'):
         summary += f'Кнопка: «{data["btn_label"]}»'
         if data.get('url'):
             summary += f' → {data["url"]}'
         summary += '\n'
+
+    kb = _confirm_kb(ad_id, balance, amount)
 
     if ad_type == 'broadcast':
         summary += '\n👆 <i>Выше — предпросмотр вашей рекламы</i>'
@@ -171,15 +184,15 @@ async def _go_to_confirm(msg: Message, state: FSMContext, uid: int, edit: bool =
             await _send_ad_preview(msg, data)
         except Exception:
             pass
-        await msg.answer(summary, parse_mode='HTML', reply_markup=_confirm_kb(ad_id))
+        await msg.answer(summary, parse_mode='HTML', reply_markup=kb)
     else:
         if edit:
             try:
-                await msg.edit_text(summary, parse_mode='HTML', reply_markup=_confirm_kb(ad_id))
+                await msg.edit_text(summary, parse_mode='HTML', reply_markup=kb)
                 return
             except TelegramBadRequest:
                 pass
-        await msg.answer(summary, parse_mode='HTML', reply_markup=_confirm_kb(ad_id))
+        await msg.answer(summary, parse_mode='HTML', reply_markup=kb)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -419,6 +432,46 @@ async def step_ads_btn_url(message: Message, state: FSMContext):
 # ─────────────────────────────────────────────────────────────────
 # Confirm & pay
 # ─────────────────────────────────────────────────────────────────
+
+@router.callback_query(AdFlow.confirm, F.data.startswith('ads_pay_bal_'))
+async def cb_ads_pay_balance(callback: CallbackQuery, state: FSMContext):
+    ad_id = int(callback.data.split('_')[-1])
+    ad    = get_ad(ad_id)
+    if not ad:
+        await callback.answer('❌ Объявление не найдено', show_alert=True)
+        await state.clear()
+        return
+
+    amount = AD_PRICES[ad['type']]
+    uid    = callback.from_user.id
+
+    ok = deduct_balance(uid, amount, 'ad_payment', f'Реклама #{ad_id} · {ad["show_date"]}')
+    if not ok:
+        await callback.answer('❌ Недостаточно средств на балансе', show_alert=True)
+        return
+
+    activate_ad(ad_id)
+    await state.clear()
+
+    try:
+        await notify_admin_new_ad(ad_id)
+    except Exception:
+        pass
+
+    await callback.message.edit_text(
+        f'✅ <b>Оплачено с баланса!</b>\n\n'
+        f'Тип: {_type_label(ad["type"])}\n'
+        f'Дата показа: <b>{ad["show_date"]}</b>\n'
+        f'Сумма: <b>${amount:.2f} USDT</b>\n\n'
+        'Реклама отправлена на проверку администратору.',
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text='💰 Баланс', callback_data='bal_menu')],
+            [InlineKeyboardButton(text='◀️ Меню',   callback_data='menu_main')],
+        ]),
+    )
+    await callback.answer()
+
 
 @router.callback_query(AdFlow.confirm, F.data.startswith('ads_confirm_'))
 async def cb_ads_confirm(callback: CallbackQuery, state: FSMContext):

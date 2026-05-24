@@ -11,6 +11,7 @@ from aiogram.types import (
 )
 
 from ads import add_bot_user, get_todays_active_button_ad
+from balance import get_balance
 from sessions import is_admin, load_meta, save_meta
 from state import userbot_refs
 from subscriptions import add_referral, get_expiry, has_active_sub
@@ -62,6 +63,12 @@ def _main_menu_text(uid: int = 0) -> str:
             lines.append(f'🔀 Прокси: <code>{auth}{proxy["host"]}:{proxy["port"]}</code>')
         else:
             lines.append('🔀 Прокси: стандартный')
+        # Баланс
+        try:
+            bal = get_balance(uid)
+            lines.append(f'💰 Баланс: ${bal:.2f}')
+        except Exception:
+            pass
         # Статус подписки
         if has_active_sub(uid):
             days = max(0, (get_expiry(uid) - int(time.time())) // 86400)
@@ -83,11 +90,14 @@ def _main_menu_kb(uid: int) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text='💎 Подписка', callback_data='sub_menu'),
-            InlineKeyboardButton(text='🔌 Прокси',   callback_data='proxy_menu'),
+            InlineKeyboardButton(text='💰 Баланс',   callback_data='bal_menu'),
         ],
         [
-            InlineKeyboardButton(text='📖 Команды',         callback_data='guide_main'),
-            InlineKeyboardButton(text='📢 Реклама',          callback_data='ads_start'),
+            InlineKeyboardButton(text='🔌 Прокси',   callback_data='proxy_menu'),
+            InlineKeyboardButton(text='📖 Команды',  callback_data='guide_main'),
+        ],
+        [
+            InlineKeyboardButton(text='📢 Реклама',  callback_data='ads_start'),
         ],
     ]
     # Inject active button ad if any
