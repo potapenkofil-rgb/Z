@@ -44,8 +44,21 @@ def _welcome_kb() -> InlineKeyboardMarkup:
     ])
 
 
-def _main_menu_text() -> str:
-    return '🏠 <b>Главное меню</b>'
+def _main_menu_text(uid: int = 0) -> str:
+    lines = ['🏠 <b>Главное меню</b>\n']
+    if uid:
+        # Статус аккаунта
+        if uid in userbot_refs:
+            lines.append('🔌 Аккаунт: 🟢 подключён')
+        else:
+            lines.append('🔌 Аккаунт: 🔴 не подключён')
+        # Статус подписки
+        if has_active_sub(uid):
+            days = max(0, (get_expiry(uid) - int(time.time())) // 86400)
+            lines.append(f'💎 Подписка: активна · {days} дн.')
+        else:
+            lines.append('💎 Подписка: не активна')
+    return '\n'.join(lines)
 
 
 def _main_menu_kb(uid: int) -> InlineKeyboardMarkup:
@@ -98,7 +111,7 @@ async def cmd_start(message: Message, command: CommandObject):
                 message.chat.id,
             ))
         await message.answer(
-            _main_menu_text(), parse_mode='HTML',
+            _main_menu_text(uid), parse_mode='HTML',
             reply_markup=_main_menu_kb(uid),
         )
     else:
@@ -113,7 +126,7 @@ async def cmd_start(message: Message, command: CommandObject):
 async def cb_menu_main(callback: CallbackQuery):
     uid = callback.from_user.id
     await callback.message.edit_text(
-        _main_menu_text(), parse_mode='HTML',
+        _main_menu_text(uid), parse_mode='HTML',
         reply_markup=_main_menu_kb(uid),
     )
     await callback.answer()
@@ -180,6 +193,7 @@ async def cb_menu_account(callback: CallbackQuery):
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text='💎 Подписка',          callback_data='sub_menu')],
+        [InlineKeyboardButton(text='🔌 Прокси',            callback_data='proxy_menu')],
         [InlineKeyboardButton(text='❌ Отключить аккаунт', callback_data='menu_disconnect')],
         [InlineKeyboardButton(text='◀️ Меню',              callback_data='menu_main')],
     ])
