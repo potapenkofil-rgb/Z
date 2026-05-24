@@ -6,7 +6,17 @@ from aiogram.types import (
     CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message,
 )
 
-from config import bot, dp
+from ads import (
+    activate_ad,
+    get_ad,
+    get_all_bot_users,
+    get_pending_ad_invoices,
+    get_todays_broadcast_ads,
+    init_ads_db,
+    mark_ad_shown,
+    reject_ad,
+)
+from config import SUPER_ADMIN_ID, bot, dp
 from cryptopay import get_invoice
 from sessions import is_admin, load_meta
 import config
@@ -27,6 +37,7 @@ from templates import init_templates_db
 from userbot import connect_and_run
 
 from handlers import admin, auth, callbacks, guide, proxy, start, subscription, templates
+from handlers import ads as ads_handler
 
 # ─────────────────────────────────────────────────────────────────
 # Register routers
@@ -40,6 +51,7 @@ dp.include_router(subscription.router)
 dp.include_router(callbacks.router)
 dp.include_router(templates.router)
 dp.include_router(proxy.router)
+dp.include_router(ads_handler.router)
 
 # ─────────────────────────────────────────────────────────────────
 # Ban middleware
@@ -256,6 +268,103 @@ async def notify_interrupted_tasks():
     clear_running_tasks()
 
 
+async def _notify_admin_new_ad(ad_id: int):
+    ad = get_ad(ad_id)
+    if not ad:
+        return
+    type_label = '🔘 Кнопка в меню' if ad['type'] == 'button' else '📨 Рассылка'
+    text = (
+        f'📢 <b>Новая реклама на модерацию</b>\n\n'
+        f'Тип: {type_label}\n'
+        f'Дата: {ad["show_date"]}\n'
+        f'Сумма: ${ad["amount"]}\n\n'
+        f'Текст:\n{ad["text"][:300]}'
+    )
+    if ad.get('url'):
+        text += f'\n\nСсылка: {ad["url"]}'
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text='✅ Одобрить', callback_data=f'adm_ad_approve_{ad_id}'),
+            InlineKeyboardButton(text='❌ Отклонить', callback_data=f'adm_ad_reject_{ad_id}'),
+        ]
+    ])
+    try:
+        await bot.send_message(SUPER_ADMIN_ID, text, parse_mode='HTML', reply_markup=kb)
+    except Exception:
+        pass
+
+
+async def poll_ad_invoices():
+    """Check CryptoBot status for ad invoices every 30 seconds."""
+    while True:
+        try:
+            for invoice_id, ad_id in get_pending_ad_invoices():
+                try:
+                    inv = await get_invoice(invoice_id)
+                    if not inv:
+                        continue
+                    status = inv.get('status')
+                    if status == 'paid':
+                        activate_ad(ad_id)
+                        ad = get_ad(ad_id)
+                        # Notify user
+                        try:
+                            await bot.send_message(
+                                ad['user_id'],
+                                f'✅ <b>Реклама оплачена!</b>\n\nДата показа: <b>{ad["show_date"]}</b>\n'
+                                'Ожидает проверки администратора.',
+                                parse_mode='HTML',
+                            )
+                        except Exception:
+                            pass
+                        # Notify admin
+                        await _notify_admin_new_ad(ad_id)
+                    elif status == 'expired':
+                        reject_ad(ad_id)
+                except Exception as e:
+                    print(f'[poll_ad_invoices] {invoice_id}: {e}')
+        except Exception as e:
+            print(f'[poll_ad_invoices] loop: {e}')
+        await asyncio.sleep(30)
+
+
+async def broadcast_ads_task():
+    """Every minute check if it's time to send broadcast ads."""
+    import datetime
+    sent_today: set = set()
+    while True:
+        await asyncio.sleep(60)
+        try:
+            now = datetime.datetime.utcnow()
+            if now.hour == 15 and now.minute == 0:
+                ads = get_todays_broadcast_ads()
+                for ad in ads:
+                    if ad['id'] in sent_today:
+                        continue
+                    users = get_all_bot_users()
+                    reply_markup = None
+                    if ad.get('url'):
+                        reply_markup = InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(
+                                text=ad['btn_label'] or '🔗 Подробнее',
+                                url=ad['url'],
+                            )]
+                        ])
+                    for uid in users:
+                        try:
+                            await bot.send_message(
+                                uid, ad['text'],
+                                parse_mode='HTML',
+                                reply_markup=reply_markup,
+                            )
+                        except Exception:
+                            pass
+                    mark_ad_shown(ad['id'])
+                    sent_today.add(ad['id'])
+        except Exception as e:
+            print(f'[broadcast_ads] {e}')
+
+
 async def _supervised(coro_fn, name: str):
     """Запускает корутину и перезапускает её при падении."""
     while True:
@@ -269,6 +378,7 @@ async def _supervised(coro_fn, name: str):
 async def main():
     init_db()
     init_templates_db()
+    init_ads_db()
     try:
         me = await bot.get_me()
         config.BOT_USERNAME = me.username or ''
@@ -276,8 +386,10 @@ async def main():
         pass
     await notify_interrupted_tasks()
     await restore_all_sessions()
-    asyncio.create_task(_supervised(poll_invoices,    'poll_invoices'))
-    asyncio.create_task(_supervised(notify_expiring,  'notify_expiring'))
+    asyncio.create_task(_supervised(poll_invoices,       'poll_invoices'))
+    asyncio.create_task(_supervised(notify_expiring,     'notify_expiring'))
+    asyncio.create_task(_supervised(poll_ad_invoices,    'poll_ad_invoices'))
+    asyncio.create_task(_supervised(broadcast_ads_task,  'broadcast_ads'))
     await dp.start_polling(bot)
 
 

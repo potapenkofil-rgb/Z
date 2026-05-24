@@ -13,6 +13,7 @@ from aiogram.types import (
 from telethon import TelegramClient
 from telethon.errors import PhoneCodeInvalidError, SessionPasswordNeededError
 
+from ads import approve_ad, get_ad, get_pending_ads, reject_ad
 from config import PROXY, SUPER_ADMIN_ID
 from sessions import (
     add_admin,
@@ -80,6 +81,7 @@ def _admin_panel_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text='💎 Подписки',            callback_data='adm_subs')],
         [InlineKeyboardButton(text='📊 Статистика',          callback_data='adm_stats')],
         [InlineKeyboardButton(text='📣 Рассылка',            callback_data='adm_broadcast')],
+        [InlineKeyboardButton(text='📢 Реклама',             callback_data='adm_ads')],
         [InlineKeyboardButton(text='◀️ Меню',                callback_data='menu_main')],
     ])
 
@@ -740,4 +742,159 @@ async def step_broadcast_text(message: Message, state: FSMContext):
         f'📣 <b>Рассылка завершена</b>\n\n'
         f'✅ Отправлено: {sent}\n❌ Не доставлено: {failed}',
         parse_mode='HTML',
+    )
+
+
+# ─────────────────────────────────────────────────────────────────
+# Модерация рекламы
+# ─────────────────────────────────────────────────────────────────
+
+def _ad_card_text(ad: dict) -> str:
+    type_label = '🔘 Кнопка в меню' if ad['type'] == 'button' else '📨 Рассылка'
+    text = (
+        f'📢 <b>Реклама #{ad["id"]}</b>\n\n'
+        f'Тип: {type_label}\n'
+        f'Дата: <b>{ad["show_date"]}</b>\n'
+        f'Сумма: <b>${ad["amount"]:.2f}</b>\n'
+        f'Пользователь: <code>{ad["user_id"]}</code>\n\n'
+        f'Текст:\n{ad["text"][:300]}'
+    )
+    if ad.get('url'):
+        text += f'\n\nСсылка: {ad["url"]}'
+    if ad.get('btn_label'):
+        text += f'\nКнопка: {ad["btn_label"]}'
+    return text
+
+
+def _pending_ads_kb(ads: list) -> InlineKeyboardMarkup:
+    rows = []
+    for ad in ads:
+        type_icon = '🔘' if ad['type'] == 'button' else '📨'
+        rows.append([
+            InlineKeyboardButton(
+                text=f'{type_icon} #{ad["id"]} — {ad["show_date"]}',
+                callback_data=f'adm_ad_view_{ad["id"]}',
+            )
+        ])
+    rows.append([InlineKeyboardButton(text='◀️ Назад', callback_data='adm_back')])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _ad_moderate_kb(ad_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text='✅ Одобрить', callback_data=f'adm_ad_approve_{ad_id}'),
+            InlineKeyboardButton(text='❌ Отклонить', callback_data=f'adm_ad_reject_{ad_id}'),
+        ],
+        [InlineKeyboardButton(text='◀️ К списку', callback_data='adm_ads')],
+    ])
+
+
+@router.callback_query(F.data == 'adm_ads')
+async def cb_adm_ads(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer('Нет доступа')
+        return
+    ads = get_pending_ads()
+    if not ads:
+        await callback.message.edit_text(
+            '📢 <b>Модерация рекламы</b>\n\nПендинг-объявлений нет.',
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text='◀️ Назад', callback_data='adm_back')],
+            ]),
+        )
+    else:
+        await callback.message.edit_text(
+            f'📢 <b>Модерация рекламы</b>\n\nОжидают проверки: {len(ads)}',
+            parse_mode='HTML',
+            reply_markup=_pending_ads_kb(ads),
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith('adm_ad_view_'))
+async def cb_adm_ad_view(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer('Нет доступа')
+        return
+    ad_id = int(callback.data[12:])
+    ad = get_ad(ad_id)
+    if not ad:
+        await callback.answer('❌ Объявление не найдено', show_alert=True)
+        return
+    await callback.message.edit_text(
+        _ad_card_text(ad), parse_mode='HTML',
+        reply_markup=_ad_moderate_kb(ad_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith('adm_ad_approve_'))
+async def cb_adm_ad_approve(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer('Нет доступа')
+        return
+    ad_id = int(callback.data[15:])
+    ad = get_ad(ad_id)
+    if not ad:
+        await callback.answer('❌ Объявление не найдено', show_alert=True)
+        return
+    approve_ad(ad_id)
+    # Notify user
+    type_label = '🔘 Кнопка в меню' if ad['type'] == 'button' else '📨 Рассылка'
+    try:
+        await callback.bot.send_message(
+            ad['user_id'],
+            f'✅ <b>Реклама одобрена!</b>\n\n'
+            f'Тип: {type_label}\n'
+            f'Дата показа: <b>{ad["show_date"]}</b>\n\n'
+            f'Ваша реклама будет показана в указанный день.',
+            parse_mode='HTML',
+        )
+    except Exception:
+        pass
+    await callback.answer('✅ Одобрено')
+    await callback.message.edit_text(
+        f'✅ Реклама #{ad_id} одобрена.',
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text='◀️ К списку', callback_data='adm_ads')],
+        ]),
+    )
+
+
+@router.callback_query(F.data.startswith('adm_ad_reject_'))
+async def cb_adm_ad_reject(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer('Нет доступа')
+        return
+    ad_id = int(callback.data[14:])
+    ad = get_ad(ad_id)
+    if not ad:
+        await callback.answer('❌ Объявление не найдено', show_alert=True)
+        return
+    reject_ad(ad_id)
+    refund = ad['amount'] * 0.5
+    type_label = '🔘 Кнопка в меню' if ad['type'] == 'button' else '📨 Рассылка'
+    # Notify user
+    try:
+        await callback.bot.send_message(
+            ad['user_id'],
+            f'❌ <b>Реклама отклонена</b>\n\n'
+            f'Тип: {type_label}\n'
+            f'Дата: <b>{ad["show_date"]}</b>\n\n'
+            f'К сожалению, ваша реклама была отклонена модератором.\n'
+            f'Возврат 50%: <b>${refund:.2f} USDT</b> будет обработан вручную.\n\n'
+            f'По вопросам обращайтесь к администратору.',
+            parse_mode='HTML',
+        )
+    except Exception:
+        pass
+    await callback.answer('❌ Отклонено')
+    await callback.message.edit_text(
+        f'❌ Реклама #{ad_id} отклонена. Возврат ${refund:.2f} USDT пользователю <code>{ad["user_id"]}</code>.',
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text='◀️ К списку', callback_data='adm_ads')],
+        ]),
     )
