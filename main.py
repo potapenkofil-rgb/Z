@@ -41,6 +41,7 @@ from subscriptions import (
     remove_pending_invoice,
 )
 from templates import init_templates_db
+from settings import init_settings_db
 from userbot import connect_and_run
 
 from handlers import admin, auth, callbacks, guide, proxy, start, subscription, templates
@@ -409,6 +410,7 @@ async def main():
     init_templates_db()
     init_ads_db()
     init_balance_db()
+    init_settings_db()
     try:
         me = await bot.get_me()
         config.BOT_USERNAME = me.username or ''

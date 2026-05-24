@@ -3,6 +3,8 @@ import os
 import re
 import threading
 
+from settings import should_catch_dm
+
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from telethon import TelegramClient, events
 from telethon.tl.functions.messages import GetDialogFiltersRequest
@@ -483,6 +485,8 @@ def run_client_in_thread(user_id: int, api_id: int, api_hash: str,
         @client.on(events.NewMessage(incoming=True))
         async def on_new(event):
             try:
+                if event.is_private and not should_catch_dm(user_id):
+                    return
                 await try_claim(event.message)
             except Exception as e:
                 print(f'[{user_id}] on_new error: {e}')
@@ -490,6 +494,8 @@ def run_client_in_thread(user_id: int, api_id: int, api_hash: str,
         @client.on(events.MessageEdited(incoming=True))
         async def on_edit(event):
             try:
+                if event.is_private and not should_catch_dm(user_id):
+                    return
                 await try_claim(event.message)
             except Exception as e:
                 print(f'[{user_id}] on_edit error: {e}')
