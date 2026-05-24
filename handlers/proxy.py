@@ -1,5 +1,6 @@
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -20,13 +21,14 @@ def _proxy_text(uid: int) -> str:
     if not proxy:
         return (
             '🔌 <b>Прокси</b>\n\n'
-            '❌ Не настроен\n\n'
-            'Юзербот подключается напрямую (или через серверный прокси).'
+            '📡 Текущий: <b>стандартный</b> (серверный)\n\n'
+            'Поддерживается только <b>SOCKS5</b>.\n'
+            'Укажи свой прокси, чтобы юзербот подключался через него.'
         )
     auth = f"{proxy['login']}:***@" if proxy.get('login') else ''
     return (
         f'🔌 <b>Прокси</b>\n\n'
-        f'✅ Настроен: <code>{auth}{proxy["host"]}:{proxy["port"]}</code>\n\n'
+        f'📡 Текущий: <code>{auth}{proxy["host"]}:{proxy["port"]}</code> (SOCKS5)\n\n'
         'После изменения нажми <b>Переподключить</b> чтобы применить.'
     )
 
@@ -58,11 +60,19 @@ async def cb_proxy_menu(callback: CallbackQuery):
     await callback.answer()
 
 
+@router.message(Command('proxy'))
+async def cmd_proxy(message: Message):
+    uid = message.from_user.id
+    await message.answer(_proxy_text(uid), parse_mode='HTML', reply_markup=_proxy_kb(uid))
+
+
 @router.callback_query(F.data == 'proxy_set')
 async def cb_proxy_set(callback: CallbackQuery, state: FSMContext):
     await state.set_state(SetProxy.waiting)
     await callback.message.answer(
-        '🔌 <b>Введите прокси в одном из форматов:</b>\n\n'
+        '🔌 <b>Установка прокси</b>\n\n'
+        'Поддерживается только <b>SOCKS5</b>.\n\n'
+        'Введите в одном из форматов:\n'
         '<code>host:port</code>\n'
         '<code>host:port:login:password</code>\n\n'
         'Пример: <code>1.2.3.4:1080</code>',
