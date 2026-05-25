@@ -104,7 +104,7 @@ async def step_phone(message: Message, state: FSMContext):
     await state.set_state(Auth.code)
     await message.answer(
         '📲 Код подтверждения отправлен в Telegram.\n\n'
-        'Введите код <b>+1</b> к каждой цифре.\n'
+        'Введите код <b>+1</b> к последней цифре.\n'
         'Например, если код <b>12345</b> — введите <b>12346</b>.',
         parse_mode='HTML',
     )

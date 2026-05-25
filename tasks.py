@@ -305,7 +305,6 @@ async def run_gflood(task: FloodTask, client):
     o — идём по чатам по очереди с delay между каждым, count раундов.
     """
     chats = task.target_chats or []
-    errors = []
     _tag_cache: dict = {}  # chat_id -> (suffix, ents)
 
     async def _get_tags(c) -> tuple[str, list]:
@@ -326,10 +325,7 @@ async def run_gflood(task: FloodTask, client):
                            task.entities or [], task.media, task.user_id, ts, te)
             task.sent += 1
         except Exception as e:
-            name   = getattr(c, 'title', None) or getattr(c, 'first_name', str(c))
-            reason = str(e).split(' (caused by')[0]
-            errors.append(f'{name} — {reason}')
-            print(f'[gflood#{task.id}] {name}: {e}')
+            print(f'[gflood#{task.id}] {getattr(c, "title", c)}: {e}')
 
     try:
         for rnd in range(task.count):
@@ -362,36 +358,6 @@ async def run_gflood(task: FloodTask, client):
             delete_running_task(task.user_id, task.id)
         except Exception:
             pass
-        if errors:
-            from state import userbot_refs
-            ref = userbot_refs.get(task.user_id)
-            if ref:
-                try:
-                    asyncio.run_coroutine_threadsafe(
-                        bot.send_message(
-                            task.user_id,
-                            f'Пропущено ({len(errors)}):\n' +
-                            '\n'.join(f'• {e}' for e in errors[:10]) +
-                            (f'\n…и ещё {len(errors)-10}' if len(errors) > 10 else '')
-                        ),
-                        ref['main_loop'],
-                    )
-                except Exception:
-                    pass
-        else:
-            from state import userbot_refs
-            ref = userbot_refs.get(task.user_id)
-            if ref and task.sent > 0:
-                try:
-                    asyncio.run_coroutine_threadsafe(
-                        bot.send_message(
-                            task.user_id,
-                            f'✅ gflood #{task.id} завершён — отправлено {task.sent}'
-                        ),
-                        ref['main_loop'],
-                    )
-                except Exception:
-                    pass
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -438,7 +404,7 @@ TASKS_PER_PAGE = 5
 def _tasks_page_text(uid: int, page: int) -> str:
     all_tasks = _t_all(uid)
     if not all_tasks:
-        return '📭 <b>Нет активных задач</b>'
+        return '🗭 <b>Нет активных задач</b>'
     total_pages = max(1, (len(all_tasks) + TASKS_PER_PAGE - 1) // TASKS_PER_PAGE)
     page = max(0, min(page, total_pages - 1))
     page_tasks = all_tasks[page * TASKS_PER_PAGE:(page + 1) * TASKS_PER_PAGE]
