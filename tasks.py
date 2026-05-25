@@ -40,6 +40,7 @@ class FloodTask:
     gflood_mode:  Optional[str]  = None   # 's' | 'o'
     tmpl_name:    Optional[str]  = None   # template used at task creation
     entities:     Optional[list] = None   # Telethon formatting entities for text
+    tag_mode:     Optional[str]  = None   # 'all' | 'noadmins'
 
     @property
     def elapsed(self) -> float:
@@ -158,26 +159,85 @@ def _with_watermark(text: str, entities: list, user_id: int) -> tuple[str, list 
     return prefix + WATERMARK_TEXT, ents
 
 
-async def _send_one(client, chat, text: str, entities: list, media: Any, user_id: int):
+async def _get_tag_block(client, chat, tag_mode: str) -> tuple[str, list]:
+    """Collect up to 50 recent unique senders and return (zws_string, telethon_entities)."""
+    from telethon.tl.types import MessageEntityTextUrl
+    ZERO = '​'
+    admin_ids: set[int] = set()
+    if tag_mode == 'noadmins':
+        try:
+            from telethon.tl.functions.channels import GetParticipantsRequest
+            from telethon.tl.types import ChannelParticipantsAdmins
+            result = await client(GetParticipantsRequest(
+                channel=chat, filter=ChannelParticipantsAdmins(), offset=0, limit=200, hash=0))
+            admin_ids = {u.id for u in result.users}
+        except Exception:
+            pass
+    seen: set[int] = set()
+    uids: list[int] = []
+    async for msg in client.iter_messages(chat, limit=2000):
+        if len(uids) >= 50:
+            break
+        if not msg.sender_id or msg.sender_id in seen:
+            continue
+        seen.add(msg.sender_id)
+        try:
+            sender = await msg.get_sender()
+        except Exception:
+            continue
+        if sender is None or getattr(sender, 'bot', False):
+            continue
+        if msg.sender_id in admin_ids:
+            continue
+        uids.append(msg.sender_id)
+    if not uids:
+        return ('', [])
+    suffix = ZERO * len(uids)
+    ents = [MessageEntityTextUrl(offset=i, length=1, url=f'tg://user?id={uid}')
+            for i, uid in enumerate(uids)]
+    return (suffix, ents)
+
+
+async def _send_one(client, chat, text: str, entities: list, media: Any, user_id: int,
+                    tag_suffix: str = '', tag_ents: Optional[list] = None):
     from telethon.errors import FloodWaitError
     chat_id = getattr(chat, 'id', chat)
     if is_blacklisted(user_id, chat_id):
         return
+
+    def _append_tags(base_text: str, base_ents: Optional[list]) -> tuple[str, Optional[list]]:
+        if not tag_suffix:
+            return base_text, base_ents
+        offset = _utf16_len(base_text)
+        merged_ents = list(base_ents or [])
+        for e in (tag_ents or []):
+            e2 = copy.copy(e)
+            e2.offset = offset + e.offset
+            merged_ents.append(e2)
+        return base_text + tag_suffix, merged_ents or None
+
     for attempt in range(2):
         try:
             if media:
                 if _is_sticker(media):
-                    # У стикеров нет caption; отправляем стикер, затем watermark отдельно
                     await client.send_file(chat, media.document)
+                    wm_text = ''
+                    wm_ents: list = []
                     if not has_active_sub(user_id):
                         from telethon.tl.types import MessageEntityBold
                         wlen = _utf16_len(WATERMARK_TEXT)
-                        await client.send_message(
-                            chat, WATERMARK_TEXT,
-                            formatting_entities=[MessageEntityBold(offset=0, length=wlen)],
-                        )
+                        wm_text = WATERMARK_TEXT
+                        wm_ents = [MessageEntityBold(offset=0, length=wlen)]
+                    extra_text, extra_ents = _append_tags(wm_text, wm_ents)
+                    if extra_text:
+                        await client.send_message(chat, extra_text,
+                                                   formatting_entities=extra_ents or None)
+                    elif tag_suffix:
+                        t2, e2 = _append_tags('', [])
+                        await client.send_message(chat, t2, formatting_entities=e2 or None)
                 else:
                     final_text, final_ents = _with_watermark(text or '', entities, user_id)
+                    final_text, final_ents = _append_tags(final_text, final_ents)
                     file_obj = (getattr(media, 'document', None)
                                 or getattr(media, 'photo', None)
                                 or media)
@@ -188,6 +248,7 @@ async def _send_one(client, chat, text: str, entities: list, media: Any, user_id
                     )
             else:
                 final_text, final_ents = _with_watermark(text or '', entities, user_id)
+                final_text, final_ents = _append_tags(final_text, final_ents)
                 await client.send_message(
                     chat, final_text,
                     formatting_entities=final_ents,
@@ -201,6 +262,12 @@ async def _send_one(client, chat, text: str, entities: list, media: Any, user_id
 
 
 async def run_flood(task: FloodTask, client):
+    tag_suffix, tag_ents = '', []
+    if task.tag_mode:
+        try:
+            tag_suffix, tag_ents = await _get_tag_block(client, task.chat_id, task.tag_mode)
+        except Exception as e:
+            print(f'[flood#{task.id}] tag_block error: {e}')
     try:
         while task.sent < task.count and not task.stopped:
             while task.paused and not task.stopped:
@@ -209,7 +276,8 @@ async def run_flood(task: FloodTask, client):
                 break
             try:
                 await _send_one(client, task.chat_id, task.text,
-                               task.entities or [], task.media, task.user_id)
+                               task.entities or [], task.media, task.user_id,
+                               tag_suffix, tag_ents)
                 task.sent += 1
                 if task.sent % 10 == 0:
                     try:
@@ -238,11 +306,24 @@ async def run_gflood(task: FloodTask, client):
     """
     chats = task.target_chats or []
     errors = []
+    _tag_cache: dict = {}  # chat_id -> (suffix, ents)
+
+    async def _get_tags(c) -> tuple[str, list]:
+        if not task.tag_mode:
+            return ('', [])
+        cid = getattr(c, 'id', c)
+        if cid not in _tag_cache:
+            try:
+                _tag_cache[cid] = await _get_tag_block(client, c, task.tag_mode)
+            except Exception:
+                _tag_cache[cid] = ('', [])
+        return _tag_cache[cid]
 
     async def _send_with_log(c):
         try:
+            ts, te = await _get_tags(c)
             await _send_one(client, c, task.text,
-                           task.entities or [], task.media, task.user_id)
+                           task.entities or [], task.media, task.user_id, ts, te)
             task.sent += 1
         except Exception as e:
             name   = getattr(c, 'title', None) or getattr(c, 'first_name', str(c))
@@ -281,7 +362,6 @@ async def run_gflood(task: FloodTask, client):
             delete_running_task(task.user_id, task.id)
         except Exception:
             pass
-        # Отчёт пользователю об ошибках через главный loop бота
         if errors:
             from state import userbot_refs
             ref = userbot_refs.get(task.user_id)
@@ -299,7 +379,6 @@ async def run_gflood(task: FloodTask, client):
                 except Exception:
                     pass
         else:
-            # Успех — тоже уведомим
             from state import userbot_refs
             ref = userbot_refs.get(task.user_id)
             if ref and task.sent > 0:
@@ -513,6 +592,7 @@ async def _launch_gflood(client, user_id: int, folder_id: int,
         target_chats=chats, gflood_mode=cfg['mode'],
         tmpl_name=cfg.get('tmpl_name'),
         entities=cfg.get('entities') or [],
+        tag_mode=cfg.get('tag_mode'),
     )
     _t_add(t)
     t.asyncio_task = _asyncio.get_running_loop().create_task(run_gflood(t, client))

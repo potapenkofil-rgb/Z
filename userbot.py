@@ -3,11 +3,14 @@ import os
 import re
 import threading
 
+from settings import should_catch_dm
+
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from telethon import TelegramClient, events
 from telethon.tl.functions.messages import GetDialogFiltersRequest
 
 from config import BOT_USER_ID, PROXY, bot
+from subscriptions import has_active_sub
 from sessions import load_meta, save_meta
 from state import _globally_processed, _launching, active, pending_gflood, userbot_refs
 from templates import (
@@ -59,14 +62,28 @@ async def _on_outgoing(event, client, user_id: int, chat_id_bot: int, main_loop)
         print(f'[{user_id}] ошибка команды: {e}')
 
 
-def _apply_tmpl(body: str, user_id: int) -> tuple[str | None, str | None]:
-    """Если body начинается с --tmpl NAME, подставляет текст шаблона.
-    Возвращает (text, tmpl_name). text=None если шаблон не найден."""
+def _extract_tag_mode(body: str) -> tuple[str, str | None]:
+    """Strip --tagall / --tagallwa from body; return (cleaned_body, tag_mode)."""
+    tag_mode = None
+    if '--tagallwa' in body:
+        body = body.replace('--tagallwa', '').strip()
+        tag_mode = 'noadmins'
+    elif '--tagall' in body:
+        body = body.replace('--tagall', '').strip()
+        tag_mode = 'all'
+    return body, tag_mode
+
+
+def _apply_tmpl(body: str, user_id: int) -> tuple[str | None, str | None, str | None]:
+    """Если body начинается с --tmpl NAME, подставляет текст/медиа шаблона.
+    Возвращает (text, media_path, tmpl_name). text=None если шаблон не найден."""
     if body.startswith('--tmpl '):
         name = body[7:].strip()
         tmpl = get_template(user_id, name)
-        return (tmpl, name if tmpl is not None else None)
-    return (body, None)
+        if tmpl is None:
+            return (None, None, name)
+        return (tmpl['text'], tmpl['media_path'], name)
+    return (body, None, None)
 
 
 async def _cmd_flood(event, client, user_id: int):
@@ -79,11 +96,14 @@ async def _cmd_flood(event, client, user_id: int):
     except (IndexError, ValueError):
         return
 
+    # Извлекаем флаг тегирования до обработки entities
+    body, tag_mode = _extract_tag_mode(body)
+
     # Вырезаем entities только для части body
     prefix     = text[: len(text) - len(body)] if body else text
     body_ents  = _slice_entities(event.message.entities or [], _utf16_len(prefix))
 
-    body, tmpl_name = _apply_tmpl(body, user_id)
+    body, tmpl_media, tmpl_name = _apply_tmpl(body, user_id)
     if body is None:
         await event.message.edit('❌ Шаблон не найден')
         await asyncio.sleep(1)
@@ -92,9 +112,18 @@ async def _cmd_flood(event, client, user_id: int):
     if tmpl_name:
         body_ents = []  # шаблон хранится как plain text
 
+    if not has_active_sub(user_id) and len(_t_all(user_id)) >= 1:
+        await event.message.edit(
+            '❌ Без подписки — только 1 задача одновременно.\n\n'
+            'Открой бота и перейди в 💎 Подписка'
+        )
+        await asyncio.sleep(3)
+        await event.message.delete()
+        return
+
     chat  = await event.get_chat()
     title = getattr(chat, 'title', None) or getattr(chat, 'first_name', str(event.chat_id))
-    media = event.message.media
+    media = tmpl_media or event.message.media
     chat_id = event.chat_id
 
     try:
@@ -107,7 +136,7 @@ async def _cmd_flood(event, client, user_id: int):
         chat_id=chat_id, chat_title=title,
         text=body, media=media, entities=body_ents,
         delay=delay, count=count,
-        tmpl_name=tmpl_name,
+        tmpl_name=tmpl_name, tag_mode=tag_mode,
     )
     _t_add(t)
     t.asyncio_task = asyncio.get_running_loop().create_task(run_flood(t, client))
@@ -148,11 +177,14 @@ async def _cmd_gflood(event, client, user_id: int, chat_id_bot: int, main_loop):
         body  = parts[4] if len(parts) > 4 else ''
     except (IndexError, ValueError):
         return
+    # Извлекаем флаг тегирования до обработки entities
+    body, tag_mode = _extract_tag_mode(body)
+
     # Вырезаем entities только для части body
     prefix    = text[: len(text) - len(body)] if body else text
     body_ents = _slice_entities(event.message.entities or [], _utf16_len(prefix))
 
-    body, tmpl_name = _apply_tmpl(body, user_id)
+    body, tmpl_media, tmpl_name = _apply_tmpl(body, user_id)
     if body is None:
         await event.message.edit('❌ Шаблон не найден')
         await asyncio.sleep(1)
@@ -161,7 +193,16 @@ async def _cmd_gflood(event, client, user_id: int, chat_id_bot: int, main_loop):
     if tmpl_name:
         body_ents = []  # шаблон хранится как plain text
 
-    media = event.message.media   # сохраняем до удаления
+    if not has_active_sub(user_id) and len(_t_all(user_id)) >= 1:
+        await event.message.edit(
+            '❌ Без подписки — только 1 задача одновременно.\n\n'
+            'Открой бота и перейди в 💎 Подписка'
+        )
+        await asyncio.sleep(3)
+        await event.message.delete()
+        return
+
+    media = tmpl_media or event.message.media   # сохраняем до удаления
     await event.message.delete()
 
     try:
@@ -180,7 +221,7 @@ async def _cmd_gflood(event, client, user_id: int, chat_id_bot: int, main_loop):
     pending_gflood[user_id] = {
         'delay': delay, 'count': count, 'mode': mode,
         'text':  body,  'media': media, 'tmpl_name': tmpl_name,
-        'entities': body_ents,
+        'entities': body_ents, 'tag_mode': tag_mode,
         'folder_titles': {f.id: _ftitle(f) for f in folders},
     }
 
@@ -365,7 +406,18 @@ def run_client_in_thread(user_id: int, api_id: int, api_hash: str,
     session = session_file or f'sessions/{user_id}'
 
     async def run():
-        client = TelegramClient(session, api_id, api_hash, proxy=PROXY)
+        # Пользовательский прокси из meta, иначе серверный
+        _meta = load_meta()
+        _uproxy = _meta.get(str(user_id), {}).get('proxy') if user_id != -1 else None
+        if _uproxy:
+            _login = _uproxy.get('login') or None
+            _pass  = _uproxy.get('password') or None
+            proxy  = ('socks5', _uproxy['host'], int(_uproxy['port']),
+                      True, _login, _pass) if _login else ('socks5', _uproxy['host'], int(_uproxy['port']))
+        else:
+            proxy = PROXY
+
+        client = TelegramClient(session, api_id, api_hash, proxy=proxy)
         await client.connect()
 
         if not await client.is_user_authorized():
@@ -427,13 +479,11 @@ def run_client_in_thread(user_id: int, api_id: int, api_hash: str,
                 print(f'[{user_id}] найден чек: {param}')
 
                 if is_checker:
-                    # Мы и есть ловец — активируем напрямую
                     try:
                         await client.send_message('CryptoBot', f'/start {param}')
                     except Exception as e:
                         print(f'[checker] ошибка активации {param}: {e}')
                 else:
-                    # Передаём активацию аккаунту-ловцу
                     checker = userbot_refs.get(-1)
                     if checker:
                         asyncio.run_coroutine_threadsafe(
@@ -441,16 +491,16 @@ def run_client_in_thread(user_id: int, api_id: int, api_hash: str,
                             checker['loop'],
                         )
                     else:
-                        # Ловец не настроен — активируем сами
                         try:
                             await client.send_message('CryptoBot', f'/start {param}')
                         except Exception as e:
                             print(f'[{user_id}] ошибка активации {param}: {e}')
 
-        # Все аккаунты детектируют чеки во входящих
         @client.on(events.NewMessage(incoming=True))
         async def on_new(event):
             try:
+                if event.is_private and not should_catch_dm(user_id):
+                    return
                 await try_claim(event.message)
             except Exception as e:
                 print(f'[{user_id}] on_new error: {e}')
@@ -458,11 +508,12 @@ def run_client_in_thread(user_id: int, api_id: int, api_hash: str,
         @client.on(events.MessageEdited(incoming=True))
         async def on_edit(event):
             try:
+                if event.is_private and not should_catch_dm(user_id):
+                    return
                 await try_claim(event.message)
             except Exception as e:
                 print(f'[{user_id}] on_edit error: {e}')
 
-        # Flood-команды — только для обычных аккаунтов, не для ловца
         if not is_checker:
             @client.on(events.NewMessage(outgoing=True))
             async def on_out(event):
