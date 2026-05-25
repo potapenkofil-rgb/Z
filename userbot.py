@@ -58,6 +58,7 @@ async def _on_outgoing(event, client, user_id: int, chat_id_bot: int, main_loop)
         elif cmd == '/noflood':   await _cmd_noflood(event, client, user_id)
         elif cmd == '/blacklist': await _cmd_blacklist(event, user_id, chat_id_bot, main_loop)
         elif cmd == '/ping':      await _cmd_ping(event, client, user_id)
+        elif cmd == '/mention':   await _cmd_mention(event, client)
     except Exception as e:
         print(f'[{user_id}] ошибка команды: {e}')
 
@@ -375,6 +376,67 @@ async def _cmd_ping(event, client, user_id: int):
     if not is_bot_chat:
         await asyncio.sleep(1)
         await event.message.delete()
+
+
+async def _cmd_mention(event, client):
+    """Тегает последних 50 не-ботов, не-админов чата скрытыми упоминаниями."""
+    await event.message.delete()
+    chat = await event.get_chat()
+
+    # Текст после команды (опционально)
+    parts   = (event.message.message or '').split(None, 1)
+    caption = parts[1].strip() if len(parts) > 1 else ''
+
+    # Получаем список администраторов чтобы исключить
+    admin_ids: set[int] = set()
+    try:
+        from telethon.tl.functions.channels import GetParticipantsRequest
+        from telethon.tl.types import ChannelParticipantsAdmins
+        result = await client(GetParticipantsRequest(
+            channel=chat,
+            filter=ChannelParticipantsAdmins(),
+            offset=0, limit=200, hash=0,
+        ))
+        admin_ids = {u.id for u in result.users}
+    except Exception:
+        pass
+
+    # Парсим историю — собираем уникальных отправителей
+    ZERO_WIDTH = '​'
+    seen: set[int] = set()
+    mentions: list[str] = []
+
+    async for msg in client.iter_messages(chat, limit=2000):
+        if len(mentions) >= 50:
+            break
+        if not msg.sender_id or msg.sender_id in seen:
+            continue
+        seen.add(msg.sender_id)
+
+        try:
+            sender = await msg.get_sender()
+        except Exception:
+            continue
+        if sender is None:
+            continue
+        if getattr(sender, 'bot', False):
+            continue
+        if sender.id in admin_ids:
+            continue
+
+        mentions.append(f'<a href="tg://user?id={sender.id}">{ZERO_WIDTH}</a>')
+
+    if not mentions:
+        m = await event.respond('⚠️ Не удалось найти подходящих участников.')
+        await asyncio.sleep(3)
+        await m.delete()
+        return
+
+    # Собираем сообщение: скрытые теги + опциональный текст
+    tag_block = ''.join(mentions)
+    text      = f'{caption}{tag_block}' if caption else tag_block
+
+    await client.send_message(chat, text, parse_mode='html')
 
 
 # ─────────────────────────────────────────────────────────────────

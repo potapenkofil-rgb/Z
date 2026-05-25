@@ -22,6 +22,9 @@ def _guide_main_kb() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text='📵 /blacklist',  callback_data='guide_blacklist'),
         ],
         [
+            InlineKeyboardButton(text='👥 /mention',    callback_data='guide_mention'),
+        ],
+        [
             InlineKeyboardButton(text='📝 /template',   callback_data='guide_template'),
             InlineKeyboardButton(text='🗂 /templates',  callback_data='guide_templates'),
         ],
@@ -176,6 +179,22 @@ async def cb_guide_templates(callback: CallbackQuery):
         '<b>Использование:</b>\n'
         '<code>/templates</code>\n\n'
         '💡 Создать шаблон — <code>/template [название] [текст]</code>'
+    )
+    await callback.message.edit_text(text, parse_mode='HTML', reply_markup=_back_kb())
+    await callback.answer()
+
+
+@router.callback_query(F.data == 'guide_mention')
+async def cb_guide_mention(callback: CallbackQuery):
+    text = (
+        '👥 <b>/mention — скрытое упоминание участников</b>\n\n'
+        'Тегает последних <b>50 активных участников</b> чата скрытыми упоминаниями '
+        '(они получают уведомление, но тег не виден в сообщении).\n\n'
+        'Администраторы и боты <b>не тегаются</b>.\n\n'
+        '<b>Использование:</b>\n'
+        '<code>/mention</code> — пустое сообщение с тегами\n'
+        '<code>/mention Текст сообщения</code> — текст + скрытые теги\n\n'
+        '⚠️ Работает только в чатах и каналах (не в ЛС).'
     )
     await callback.message.edit_text(text, parse_mode='HTML', reply_markup=_back_kb())
     await callback.answer()
